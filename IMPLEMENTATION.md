@@ -597,7 +597,7 @@ Example:
 models:
   fast-local:
     provider: openai-compatible
-    base_url: http://deepthought:8000/v1
+    base_url: http://localhost:8000/v1
     model: local-small-model
 
   gemma:
