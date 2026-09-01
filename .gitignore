@@ -8,6 +8,9 @@
 mrmr.yaml
 .env
 
+# Captured events may contain sensitive payloads; sanitize before committing.
+testdata/real-eval*.jsonl
+
 # Test/editor artifacts
 coverage.out
 .DS_Store

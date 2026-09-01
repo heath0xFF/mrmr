@@ -31,7 +31,7 @@ func main() {
 	log.SetFlags(log.LstdFlags | log.LUTC)
 
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: mrmr <run|eval> [options]")
+		fmt.Fprintln(os.Stderr, "usage: mrmr <run|eval|events|label|dataset> [options]")
 		os.Exit(2)
 	}
 
@@ -44,8 +44,20 @@ func main() {
 		if err := eval(os.Args[2:]); err != nil {
 			log.Fatal(err)
 		}
+	case "events":
+		if err := events(os.Args[2:]); err != nil {
+			log.Fatal(err)
+		}
+	case "label":
+		if err := label(os.Args[2:]); err != nil {
+			log.Fatal(err)
+		}
+	case "dataset":
+		if err := dataset(os.Args[2:]); err != nil {
+			log.Fatal(err)
+		}
 	case "-h", "--help", "help":
-		fmt.Println("usage: mrmr <run|eval> [options]")
+		fmt.Println("usage: mrmr <run|eval|events|label|dataset> [options]")
 	default:
 		log.Fatalf("unknown subcommand %q", os.Args[1])
 	}

@@ -1349,7 +1349,10 @@ mrmr eval --dataset ./testdata/generated-eval.jsonl
 mrmr status
 
 mrmr events
+mrmr events --unlabeled
 mrmr events tail
+mrmr label evt_01JXYZ --category incident --requires-action=true --outcome notify
+mrmr dataset export --output ./testdata/real-eval.jsonl
 mrmr inspect evt_01JXYZ
 
 mrmr flows

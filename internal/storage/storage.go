@@ -28,6 +28,26 @@ type EventRecord struct {
 	Duplicate bool
 }
 
+type EventLabel struct {
+	EventID         string    `json:"event_id"`
+	Category        string    `json:"category"`
+	RequiresAction  bool      `json:"requires_action"`
+	ExpectedOutcome string    `json:"expected_outcome"`
+	LabeledAt       time.Time `json:"labeled_at"`
+}
+
+type ReviewEvent struct {
+	Event    event.Event     `json:"event"`
+	Decision *event.Decision `json:"decision,omitempty"`
+	Outcome  string          `json:"outcome,omitempty"`
+	Label    *EventLabel     `json:"label,omitempty"`
+}
+
+type LabeledEvent struct {
+	Event event.Event `json:"event"`
+	Label EventLabel  `json:"label"`
+}
+
 // Open opens (creating if needed) the SQLite database with WAL mode
 // and applies pending migrations.
 func Open(path string) (*DB, error) {
@@ -89,6 +109,16 @@ CREATE TABLE executions (
 	created_at  TEXT NOT NULL
 );
 CREATE INDEX idx_executions_event ON executions(event_id);
+`,
+	`
+CREATE TABLE event_labels (
+	event_id          TEXT PRIMARY KEY REFERENCES events(id),
+	category          TEXT NOT NULL,
+	requires_action   INTEGER NOT NULL CHECK (requires_action IN (0, 1)),
+	expected_outcome  TEXT NOT NULL,
+	labeled_at        TEXT NOT NULL
+);
+CREATE INDEX idx_event_labels_time ON event_labels(labeled_at);
 `,
 }
 

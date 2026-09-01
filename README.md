@@ -66,6 +66,22 @@ go run ./cmd/mrmr eval -config mrmr.yaml -dataset testdata/generated-eval.jsonl
 
 Progress is printed to stderr. The JSON summary reports category, action, and outcome accuracy plus the false-ignore rate. Generated cases are a development baseline, not a substitute for real dogfood events.
 
+## Capture and label real events
+
+Every ingested event is already stored in SQLite. Review the unlabeled queue, attach the expected judgment, and export it in the same format used by `mrmr eval`:
+
+```bash
+go run ./cmd/mrmr events -config mrmr.yaml -unlabeled
+go run ./cmd/mrmr label evt_01... -config mrmr.yaml \
+  -category incident -requires-action=true -outcome notify
+go run ./cmd/mrmr dataset export -config mrmr.yaml \
+  -output testdata/real-eval.jsonl
+go run ./cmd/mrmr eval -config mrmr.yaml \
+  -dataset testdata/real-eval.jsonl
+```
+
+Relabeling an event replaces its previous label. Exports contain complete event payloads and are ignored by Git by default; inspect and anonymize them before sharing or committing.
+
 ## Development
 
 ```bash
