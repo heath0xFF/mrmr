@@ -1345,6 +1345,7 @@ Possible commands:
 ```bash
 mrmr init
 mrmr run
+mrmr eval --dataset ./testdata/generated-eval.jsonl
 mrmr status
 
 mrmr events

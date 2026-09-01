@@ -27,7 +27,7 @@ mrmr is early-stage software. The initial vertical slice is implemented:
 - stdout notification and ignore outcomes
 - event traces and deduplication
 
-The required 50-event golden-set quality gate has not yet been completed.
+A generated 50-event evaluation set is included for prompt development. The required real-event golden-set quality gate has not yet been completed.
 
 ## Run locally
 
@@ -55,6 +55,16 @@ curl http://localhost:4242/api/events \
 ```
 
 The response contains the persisted decision, selected outcome, and complete trace.
+
+## Evaluate a model
+
+Run the generated labeled set against the configured model:
+
+```bash
+go run ./cmd/mrmr eval -config mrmr.yaml -dataset testdata/generated-eval.jsonl
+```
+
+Progress is printed to stderr. The JSON summary reports category, action, and outcome accuracy plus the false-ignore rate. Generated cases are a development baseline, not a substitute for real dogfood events.
 
 ## Development
 

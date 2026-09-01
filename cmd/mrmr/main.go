@@ -1,6 +1,5 @@
-// Command mrmr is the single binary for the mrmr runtime. Milestone 1 is
-// deliberately minimal: one subcommand, `run`, which loads a YAML config,
-// opens SQLite, and serves POST /api/events. Each request runs the full
+// Command mrmr is the single binary for the mrmr runtime. `run` loads a YAML
+// config, opens SQLite, and serves POST /api/events. Each request runs the full
 // pipeline synchronously — persist event, interpret via the configured
 // model, evaluate policy, execute the outcome — so the HTTP response is the
 // trace of everything that happened. Synchronous processing is the point:
@@ -32,7 +31,7 @@ func main() {
 	log.SetFlags(log.LstdFlags | log.LUTC)
 
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: mrmr run [-config mrmr.yaml]")
+		fmt.Fprintln(os.Stderr, "usage: mrmr <run|eval> [options]")
 		os.Exit(2)
 	}
 
@@ -41,10 +40,14 @@ func main() {
 		if err := run(os.Args[2:]); err != nil {
 			log.Fatal(err)
 		}
+	case "eval":
+		if err := eval(os.Args[2:]); err != nil {
+			log.Fatal(err)
+		}
 	case "-h", "--help", "help":
-		fmt.Println("usage: mrmr run [-config mrmr.yaml]")
+		fmt.Println("usage: mrmr <run|eval> [options]")
 	default:
-		log.Fatalf("unknown subcommand %q (v0.1: run only)", os.Args[1])
+		log.Fatalf("unknown subcommand %q", os.Args[1])
 	}
 }
 
