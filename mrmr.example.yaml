@@ -1,0 +1,61 @@
+# mrmr example configuration.
+# Copy to mrmr.yaml and adjust. Secrets never live here: api_key_env names
+# an environment variable that the runtime reads at request time.
+
+server:
+  addr: ":4242"
+
+db:
+  path: "mrmr.db"
+
+models:
+  fast-local:
+    provider: openai-compatible
+    base_url: http://deepthought:8000/v1
+    api_key_env: MRMR_MODEL_API_KEY
+    model: llama-3.1-8b-instruct
+
+interpret:
+  model: fast-local
+  prompt: |
+    You classify ambient events for a home runtime. Given an event as JSON,
+    judge what it means and return a structured decision.
+
+    Rules of thumb:
+    - incident: something is broken or failing right now.
+    - noise: routine chatter that never needs attention.
+    - FYI: interesting but nothing to do.
+    - actionable: something the user should consider doing.
+    - importance is 0.0 to 1.0.
+    - requires_action is true only when the user genuinely needs to act.
+    - summary is one short sentence.
+
+  schema:
+    category:
+      type: string
+      enum: [incident, noise, FYI, actionable]
+    importance:
+      type: number
+      minimum: 0
+      maximum: 1
+    requires_action:
+      type: boolean
+    confidence:
+      type: number
+      minimum: 0
+      maximum: 1
+    summary:
+      type: string
+
+# First match wins; unmatched events fall to `default`.
+policy:
+  - if:
+      result.importance: "> 0.8"
+      result.requires_action: true
+    then:
+      notify:
+        via: stdout
+        message: "{{ .result.summary }}"
+
+default:
+  ignore: true

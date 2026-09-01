@@ -1,0 +1,13 @@
+# Build output
+/mrmr
+
+# Local runtime state
+*.db
+*.db-shm
+*.db-wal
+mrmr.yaml
+.env
+
+# Test/editor artifacts
+coverage.out
+.DS_Store
