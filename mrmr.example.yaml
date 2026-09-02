@@ -50,7 +50,7 @@ interpret:
 # First match wins; unmatched events fall to `default`.
 policy:
   - if:
-      result.importance: "> 0.8"
+      result.importance: ">= 0.8"
       result.requires_action: true
     then:
       notify:
