@@ -1,11 +1,13 @@
 // Command mrmr is the single binary for the mrmr runtime. `run` loads a YAML
-// config, opens SQLite, and serves POST /api/events. Each request runs the full
-// pipeline synchronously — persist event, interpret via the configured
-// model, evaluate policy, execute the outcome — so the HTTP response is the
-// trace of everything that happened. Synchronous processing is the point:
-// it makes the runtime's behavior explainable end to end and keeps the
-// invariants simple (no queue, no worker goroutines, no lost requests) at
-// the cost of latency, which is fine for ambient event volumes.
+// config, opens SQLite, and serves POST /api/events. Each request is
+// processed synchronously: the event is persisted; duplicates short-circuit
+// there with a "duplicate" marker; and the rest run deterministic filters,
+// model interpretation, policy, and outcome in order, with filter-excluded
+// events stopping before the model call. The HTTP response is the trace of
+// everything that happened. Synchronous processing is the point: it makes
+// the runtime's behavior explainable end to end and keeps the invariants
+// simple (no queue, no worker goroutines, no lost requests) at the cost of
+// latency, which is fine for ambient event volumes.
 package main
 
 import (
@@ -93,6 +95,7 @@ func run(args []string) error {
 		Prompt:   cfg.Interpret.Prompt,
 		Schema:   cfg.Interpret.Schema,
 		Policy:   cfg.Policy,
+		Filters:  cfg.Filter,
 	}
 
 	mux := http.NewServeMux()
@@ -136,9 +139,10 @@ type eventsRequest struct {
 	Metadata map[string]any `json:"metadata,omitempty"`
 }
 
-// eventsHandler returns the POST /api/events handler. Ingest is synchronous:
-// by the time the 200 goes out, the event is persisted, interpreted, routed
-// by policy, and the outcome executed. Ingest errors are persistence
+// eventsHandler returns the POST /api/events handler. Ingest is
+// synchronous: by the time the 200 goes out, the event's fate is final:
+// a duplicate, a filter exclusion before any model call, or an executed
+// policy outcome. Ingest errors are persistence
 // failures and map to 500; everything the model does wrong is already
 // captured in the decision and trace, not in the HTTP status.
 func eventsHandler(rt *runtime.Runtime) http.HandlerFunc {

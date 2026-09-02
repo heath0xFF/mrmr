@@ -1,6 +1,9 @@
-// Package runtime is the mrmr loop: persist Event → interpret → Decision →
-// policy → Outcome → adapter, with a trace at every step. This package is
-// the choreography; every stage's actual work lives in its own package.
+// Package runtime is the mrmr loop: persist Event → filter → interpret →
+// Decision → policy → Outcome → adapter, with a trace at every step. The
+// filter stage is deterministic and may short-circuit: an excluded event
+// produces no Decision and no model call.
+// This package is the choreography; every stage's actual work lives in its
+// own package.
 // The one rule that shapes everything here: fail toward ignore. A model
 // outage or a garbage result degrades mrmr into a no-op — the safe direction
 // — and never into an action nobody authorized.
@@ -15,6 +18,7 @@ import (
 	"time"
 
 	"github.com/heath0xff/mrmr/internal/event"
+	"github.com/heath0xff/mrmr/internal/filter"
 	"github.com/heath0xff/mrmr/internal/model"
 	"github.com/heath0xff/mrmr/internal/policy"
 	"github.com/heath0xff/mrmr/internal/storage"
@@ -31,6 +35,7 @@ type Runtime struct {
 	Prompt   string
 	Schema   model.Schema
 	Policy   policy.Policy
+	Filters  filter.List
 }
 
 // TraceStep is one observable moment in an event's journey. The trace is
@@ -75,6 +80,26 @@ func (r *Runtime) Ingest(ctx context.Context, e event.Event) (*Response, error) 
 		return &Response{EventID: e.ID, Duplicate: true, Trace: *t}, nil
 	}
 	step(t, "persist", "event stored")
+
+	// Filters run after the event is durable and before any model
+	// call: they are the cost gate. An excluded event produces no
+	// Decision (the model never ran, and a Decision records model
+	// judgment) but does produce an Execution row: the audit trail
+	// must show where the event stopped. The adapter is empty because
+	// a filter is a gate, not an Adapter under the project's domain
+	// boundary; the filter trace stage names the stop point.
+	if len(r.Filters) > 0 {
+		passed, reason := r.Filters.Evaluate(e)
+		if !passed {
+			step(t, "filter", "excluded: "+reason)
+			if serr := r.DB.InsertExecution(event.NewID("exe_"), e.ID, "", "ignore", "", "filtered", ""); serr != nil {
+				return nil, fmt.Errorf("persist execution: %w", serr)
+			}
+			step(t, "outcome", "executed ignore")
+			return &Response{EventID: e.ID, Outcome: "ignore", Trace: *t}, nil
+		}
+		step(t, "filter", fmt.Sprintf("%d checks passed", len(r.Filters)))
+	}
 
 	dec := &event.Decision{ID: event.NewID("dec_"), EventID: e.ID, Interpreter: r.ModelKey, Model: r.ModelCfg.Model}
 

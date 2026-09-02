@@ -1,8 +1,9 @@
 // These tests pin the whole mrmr loop end to end against a mock
 // OpenAI-compatible endpoint and a real SQLite database. The invariants
-// that matter: a decision must be persisted for every non-duplicate event,
-// invalid or errored interpretation must never reach policy (fail toward
-// ignore), and duplicates must short-circuit before the model is called.
+// that matter: a decision must be persisted for every interpreted
+// non-duplicate event, invalid or errored interpretation must never reach
+// policy (fail toward ignore), and duplicates and filter-excluded events
+// must short-circuit before the model is called.
 package runtime
 
 import (
@@ -12,11 +13,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/heath0xff/mrmr/internal/event"
+	"github.com/heath0xff/mrmr/internal/filter"
 	"github.com/heath0xff/mrmr/internal/model"
 	"github.com/heath0xff/mrmr/internal/policy"
 	"github.com/heath0xff/mrmr/internal/storage"
@@ -241,4 +244,114 @@ func TestIngestModelEndpointDownFailsTowardIgnore(t *testing.T) {
 		t.Error("model endpoint was never called")
 	}
 	hasStages(t, resp, "receive", "persist", "interpret", "policy", "outcome")
+}
+
+// The filter tests pin the gate at the pipeline level: an excluded
+// event never reaches the model, leaves no Decision, and leaves an
+// audited Execution row with a NULL decision reference. The model
+// server's call count is the assertion hook for "never reached the
+// model".
+func TestIngestFilterExcludesBeforeModel(t *testing.T) {
+	url, calls := modelServer(t, `{"category":"important","importance":0.95}`)
+	rt := newTestRuntime(t, url)
+	rt.Filters = filter.List{{Field: "data.author", Op: filter.OpNeq, Value: "dependabot[bot]"}}
+
+	// The event fails the gate and carries a secret that must not
+	// leak into the trace or the response.
+	e := testEvent("gh-filter-1")
+	e.Data = map[string]any{"author": "dependabot[bot]", "token": "super-secret"}
+
+	resp, err := rt.Ingest(context.Background(), e)
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if resp.Outcome != "ignore" {
+		t.Errorf("outcome = %q, want ignore", resp.Outcome)
+	}
+	if resp.Decision != nil {
+		t.Fatalf("decision = %+v, want none: the model never ran", resp.Decision)
+	}
+	hasStages(t, resp, "receive", "persist", "filter", "outcome")
+	if calls.Load() != 0 {
+		t.Errorf("model calls = %d, want 0: a filtered event must not reach the model", calls.Load())
+	}
+	// The failure reason is value-free, so neither the event payload
+	// nor the configured value may appear anywhere in the response.
+	b, err := json.Marshal(resp)
+	if err != nil {
+		t.Fatalf("marshal response: %v", err)
+	}
+	for _, leaked := range []string{"super-secret", "dependabot[bot]"} {
+		if strings.Contains(string(b), leaked) {
+			t.Errorf("response leaks %q: %s", leaked, b)
+		}
+	}
+
+	var n int
+	if err := rt.DB.QueryRow(`SELECT COUNT(*) FROM decisions WHERE event_id = ?`, e.ID).Scan(&n); err != nil {
+		t.Fatalf("count decisions: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("decision rows = %d, want 0", n)
+	}
+	if err := rt.DB.QueryRow(`SELECT COUNT(*) FROM executions WHERE event_id = ?`, e.ID).Scan(&n); err != nil {
+		t.Fatalf("count executions: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("execution rows = %d, want 1: the audit trail must show where the event stopped", n)
+	}
+	var nullRef bool
+	var outcome, adapter, status string
+	if err := rt.DB.QueryRow(`SELECT decision_id IS NULL, outcome, adapter, status FROM executions WHERE event_id = ?`, e.ID).Scan(&nullRef, &outcome, &adapter, &status); err != nil {
+		t.Fatalf("query executions: %v", err)
+	}
+	if !nullRef {
+		t.Error("decision_id is not NULL: a filtered event has no decision")
+	}
+	if outcome != "ignore" || adapter != "" || status != "filtered" {
+		t.Errorf("execution = (outcome %q, adapter %q, status %q), want (ignore, \"\", filtered)", outcome, adapter, status)
+	}
+}
+
+func TestIngestFilterPassesToModel(t *testing.T) {
+	url, calls := modelServer(t, `{"category":"important","importance":0.95}`)
+	rt := newTestRuntime(t, url)
+	rt.Filters = filter.List{{Field: "data.author", Op: filter.OpNeq, Value: "dependabot[bot]"}}
+
+	e := testEvent("gh-filter-2")
+	e.Data = map[string]any{"author": "alice", "msg": "fix bug"}
+
+	resp, err := rt.Ingest(context.Background(), e)
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if resp.Outcome != "notify" {
+		t.Errorf("outcome = %q, want notify", resp.Outcome)
+	}
+	hasStages(t, resp, "receive", "persist", "filter", "interpret", "policy", "outcome")
+	if calls.Load() != 1 {
+		t.Errorf("model calls = %d, want 1", calls.Load())
+	}
+}
+
+// TestIngestFilterMissingFieldExcludes pins the fail-closed rule at the
+// pipeline level: an event without the filtered field is excluded even
+// under neq, so a malformed event cannot pass the gate by default.
+func TestIngestFilterMissingFieldExcludes(t *testing.T) {
+	url, calls := modelServer(t, `{"category":"important","importance":0.95}`)
+	rt := newTestRuntime(t, url)
+	rt.Filters = filter.List{{Field: "data.author", Op: filter.OpNeq, Value: "dependabot[bot]"}}
+
+	// testEvent carries data.msg but no data.author.
+	resp, err := rt.Ingest(context.Background(), testEvent("gh-filter-3"))
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if resp.Outcome != "ignore" {
+		t.Errorf("outcome = %q, want ignore", resp.Outcome)
+	}
+	hasStages(t, resp, "receive", "persist", "filter", "outcome")
+	if calls.Load() != 0 {
+		t.Errorf("model calls = %d, want 0", calls.Load())
+	}
 }

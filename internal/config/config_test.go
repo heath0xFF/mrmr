@@ -13,6 +13,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/heath0xff/mrmr/internal/event"
+	"github.com/heath0xff/mrmr/internal/filter"
 	"github.com/heath0xff/mrmr/internal/model"
 	"github.com/heath0xff/mrmr/internal/policy"
 )
@@ -25,6 +27,7 @@ func validConfig() *Config {
 		Models: map[string]model.Config{
 			"m": {Provider: "openai-compatible", BaseURL: "http://localhost:1/v1", Model: "mock"},
 		},
+		Filter: filter.List{{Field: "source", Op: filter.OpNeq, Value: "noise-bot"}},
 		Interpret: Interpret{
 			Model:  "m",
 			Prompt: "classify this event",
@@ -156,6 +159,56 @@ func TestValidateErrors(t *testing.T) {
 			},
 			want: "default: set either notify or ignore, not both",
 		},
+		{
+			name:   "filter with unknown op",
+			mutate: func(c *Config) { c.Filter[0].Op = "lt" },
+			want:   `op "lt" not supported`,
+		},
+		{
+			name:   "filter with unknown field root",
+			mutate: func(c *Config) { c.Filter[0].Field = "foo.bar" },
+			want:   `unknown root "foo"`,
+		},
+		{
+			name:   "filter with bare data root",
+			mutate: func(c *Config) { c.Filter[0].Field = "data" },
+			want:   "data requires a sub-path",
+		},
+		{
+			name:   "filter with sub-path under scalar root",
+			mutate: func(c *Config) { c.Filter[0].Field = "type.x" },
+			want:   "type has no sub-paths",
+		},
+		{
+			name:   "filter with missing value",
+			mutate: func(c *Config) { c.Filter[0].Value = nil },
+			want:   "value is required",
+		},
+		{
+			name:   "filter with empty field",
+			mutate: func(c *Config) { c.Filter[0].Field = "" },
+			want:   "field is required",
+		},
+		{
+			name:   "filter with double event prefix",
+			mutate: func(c *Config) { c.Filter[0].Field = "event.event.data.author" },
+			want:   `unknown root "event"`,
+		},
+		{
+			name:   "filter with list value",
+			mutate: func(c *Config) { c.Filter[0].Value = []any{"a", "b"} },
+			want:   "value must be a string, number, or boolean",
+		},
+		{
+			name:   "filter with map value",
+			mutate: func(c *Config) { c.Filter[0].Value = map[string]any{"a": "b"} },
+			want:   "value must be a string, number, or boolean",
+		},
+		{
+			name:   "filter with NaN value",
+			mutate: func(c *Config) { c.Filter[0].Value = math.NaN() },
+			want:   "value must be a string, number, or boolean",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -169,6 +222,43 @@ func TestValidateErrors(t *testing.T) {
 				t.Errorf("Validate() error = %q, want containing %q", err.Error(), tt.want)
 			}
 		})
+	}
+}
+
+// TestValidateAcceptsBothFieldPathForms pins the two documented
+// spellings of a filter field: IMPLEMENTATION.md section 3 uses
+// data.author and the flow example uses event.data.author. Both must
+// validate, or a documented example fails strict config validation.
+func TestValidateAcceptsBothFieldPathForms(t *testing.T) {
+	for _, field := range []string{"data.author", "event.data.author"} {
+		c := validConfig()
+		c.Filter = filter.List{{Field: field, Op: filter.OpNeq, Value: "x"}}
+		if err := c.Validate(); err != nil {
+			t.Fatalf("Validate() for %q = %v, want nil", field, err)
+		}
+	}
+}
+
+// TestExampleConfigQuickstartEventPassesFilters pins the quickstart
+// contract: the README event has no data.author, and the fail-closed
+// missing-field rule would stop it before interpretation if the
+// shipped example filtered on an optional field. The example filters
+// on a required root instead, so the quickstart must pass.
+func TestExampleConfigQuickstartEventPassesFilters(t *testing.T) {
+	cfg, err := Load(filepath.Join("..", "..", "mrmr.example.yaml"))
+	if err != nil {
+		t.Fatalf("Load example config: %v", err)
+	}
+	if len(cfg.Filter) == 0 {
+		t.Fatal("example config has no filter: nothing to check")
+	}
+	e := event.Event{
+		Type:   "test.message",
+		Source: "curl",
+		Data:   map[string]any{"message": "The production API has returned 500 errors for five minutes."},
+	}
+	if ok, reason := cfg.Filter.Evaluate(e); !ok {
+		t.Fatalf("quickstart event fails the example filters: %s", reason)
 	}
 }
 

@@ -201,9 +201,16 @@ func (d *DB) InsertDecision(dec event.Decision) error {
 }
 
 func (d *DB) InsertExecution(id, eventID, decisionID, outcome, adapter, status, errMsg string) error {
+	// decisionID may be empty for outcomes that produce no Decision
+	// (filter-excluded events). The column is a foreign key, so empty
+	// maps to NULL: an empty string would be a dangling reference.
+	var decID any
+	if decisionID != "" {
+		decID = decisionID
+	}
 	_, err := d.Exec(`INSERT INTO executions (id, event_id, decision_id, outcome, adapter, status, error, created_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		id, eventID, decisionID, outcome, adapter, status, errMsg, now())
+		id, eventID, decID, outcome, adapter, status, errMsg, now())
 	if err != nil {
 		return fmt.Errorf("insert execution %s: %w", id, err)
 	}

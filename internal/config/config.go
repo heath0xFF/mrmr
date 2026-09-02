@@ -13,6 +13,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/heath0xff/mrmr/internal/filter"
 	"github.com/heath0xff/mrmr/internal/model"
 	"github.com/heath0xff/mrmr/internal/policy"
 )
@@ -32,8 +33,13 @@ type Interpret struct {
 }
 
 type Config struct {
-	Server    Server                  `yaml:"server"`
-	DB        DB                      `yaml:"db"`
+	Server Server `yaml:"server"`
+	DB     DB     `yaml:"db"`
+	// Filter is the pre-model gate (IMPLEMENTATION.md section 3):
+	// deterministic checks that run before any model call. An event
+	// that fails any Spec is recorded and ignored before
+	// interpretation.
+	Filter    filter.List             `yaml:"filter"`
 	Models    map[string]model.Config `yaml:"models"`
 	Interpret Interpret               `yaml:"interpret"`
 	// Policy is inlined so the YAML reads exactly like IMPLEMENTATION.md:
@@ -107,6 +113,12 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("config: schema field %q: minimum must not exceed maximum", name)
 		}
 	}
+	for i, f := range c.Filter {
+		if err := f.Validate(); err != nil {
+			return fmt.Errorf("config: filter %d: %w", i+1, err)
+		}
+	}
+
 	validateThen := func(t policy.Then, where string) error {
 		// A rule that sets both notify and ignore is almost certainly a YAML
 		// typo (a leftover ignore under a new notify). Rather than picking a

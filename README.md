@@ -21,6 +21,7 @@ mrmr is early-stage software. The initial vertical slice is implemented:
 
 - `POST /api/events`
 - SQLite persistence for events, decisions, and executions
+- deterministic pre-model filters (an event that fails any check is recorded and ignored before the model is called)
 - OpenAI-compatible model interpretation
 - schema-constrained output with validation and bounded retries
 - deterministic first-match policy
@@ -54,7 +55,7 @@ curl http://localhost:4242/api/events \
   }'
 ```
 
-The response contains the persisted decision, selected outcome, and complete trace.
+The response always contains the complete trace; events that reach policy also carry the selected outcome, interpreted events carry the persisted decision, and duplicates carry a `duplicate` marker.
 
 ## Evaluate a model
 

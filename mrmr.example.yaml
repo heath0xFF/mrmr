@@ -8,6 +8,15 @@ server:
 db:
   path: "mrmr.db"
 
+# Deterministic checks before the model. All checks must pass; an event
+# that fails any is recorded and ignored before interpretation. A field
+# the event does not carry fails every check, so filter on fields your
+# sources always send (source is always present).
+filter:
+  - field: source
+    op: neq
+    value: noise-bot
+
 models:
   fast-local:
     provider: openai-compatible
