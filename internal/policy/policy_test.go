@@ -93,6 +93,23 @@ func TestEvaluateDefaultFallback(t *testing.T) {
 	}
 }
 
+func TestEvaluateBoundaryAtThreshold(t *testing.T) {
+	// Regression: importance exactly at the configured threshold must
+	// match the rule, not fall through to default. This was broken when
+	// the policy used strict greater-than ("> 0.8") because local models
+	// commonly return 0.8 for actionable events.
+	p := Policy{
+		Rules: []Rule{{
+			If:   map[string]any{"result.importance": ">= 0.8", "result.requires_action": true},
+			Then: notify(),
+		}},
+		Default: ignore(),
+	}
+	if !isNotify(eval(t, p, map[string]any{"importance": 0.8, "requires_action": true})) {
+		t.Error("importance at exact threshold with requires_action should notify, got default ignore")
+	}
+}
+
 func TestEvaluateMissingResultFieldDoesNotMatch(t *testing.T) {
 	// A condition naming a field the model never returned must fail the
 	// rule, not panic and not silently match — otherwise typos in rule
