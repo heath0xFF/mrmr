@@ -404,7 +404,7 @@ Another:
 ```yaml
 policy:
   - if:
-      result.importance: "> 0.80"
+      result.importance: ">= 0.80"
       result.requires_action: true
     then:
       notify:
@@ -1150,7 +1150,7 @@ policy:
         agent: claude-triage
 
   - if:
-      result.importance: "> 0.80"
+      result.importance: ">= 0.80"
     then:
       notify:
         via: telegram
@@ -1650,7 +1650,7 @@ Evaluate:
 ```yaml
 policy:
   - if:
-      result.importance: "> 0.8"
+      result.importance: ">= 0.8"
     then:
       notify:
         via: stdout

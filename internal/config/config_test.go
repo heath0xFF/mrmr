@@ -230,6 +230,19 @@ func TestLoadExampleConfig(t *testing.T) {
 	if importance.Minimum == nil || *importance.Minimum != 0 || importance.Maximum == nil || *importance.Maximum != 1 {
 		t.Errorf("importance bounds = %v/%v, want 0/1", importance.Minimum, importance.Maximum)
 	}
+
+	// The shipped example must route an actionable event at the configured
+	// threshold to notify. Pin both sides of the boundary in the file users
+	// copy: importance 0.8 must notify (a strict "> 0.8" drops it into
+	// default ignore) and 0.79 must not (the threshold is 0.8, not lower).
+	// This catches a yaml revert that the policy package's operator test
+	// cannot see.
+	if then, _ := cfg.Policy.Evaluate(map[string]any{"importance": 0.8, "requires_action": true}); then.Outcome() != "notify" {
+		t.Errorf("importance 0.8 + requires_action = %s, want notify at the inclusive threshold", then.Outcome())
+	}
+	if then, _ := cfg.Policy.Evaluate(map[string]any{"importance": 0.79, "requires_action": true}); then.Outcome() != "ignore" {
+		t.Errorf("importance 0.79 + requires_action = %s, want ignore below the threshold", then.Outcome())
+	}
 }
 
 func TestLoadDefaultsWhenOmitted(t *testing.T) {
