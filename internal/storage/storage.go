@@ -48,6 +48,36 @@ type LabeledEvent struct {
 	Label EventLabel  `json:"label"`
 }
 
+// Execution is one recorded outcome attempt for an event: what the runtime
+// decided to do, which adapter did it, and how that ended. DecisionID is
+// empty for outcomes reached without model judgment — a filter exclusion or
+// a depth-capped emit — which is itself the answer to "why was there no
+// decision here?".
+type Execution struct {
+	ID         string    `json:"id"`
+	EventID    string    `json:"event_id"`
+	DecisionID string    `json:"decision_id,omitempty"`
+	Outcome    string    `json:"outcome"`
+	Adapter    string    `json:"adapter,omitempty"`
+	Status     string    `json:"status"`
+	Error      string    `json:"error,omitempty"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
+// Inspection is everything the runtime durably knows about one event, which
+// is the whole point of `mrmr inspect`: an outcome nobody can explain after
+// the fact is an outcome nobody can trust. Decisions and Executions are
+// slices rather than single values because the schema permits more than one
+// of each per event; the current pipeline writes one, and reporting what is
+// actually stored beats encoding that assumption in the reader.
+type Inspection struct {
+	Event      event.Event       `json:"event"`
+	Decisions  []event.Decision  `json:"decisions,omitempty"`
+	Executions []Execution       `json:"executions,omitempty"`
+	Trace      []event.TraceStep `json:"trace,omitempty"`
+	Label      *EventLabel       `json:"label,omitempty"`
+}
+
 // Open opens (creating if needed) the SQLite database with WAL mode
 // and applies pending migrations.
 func Open(path string) (*DB, error) {
@@ -119,6 +149,16 @@ CREATE TABLE event_labels (
 	labeled_at        TEXT NOT NULL
 );
 CREATE INDEX idx_event_labels_time ON event_labels(labeled_at);
+`,
+	`
+CREATE TABLE event_traces (
+	event_id TEXT NOT NULL REFERENCES events(id),
+	seq      INTEGER NOT NULL,
+	at       TEXT NOT NULL,
+	stage    TEXT NOT NULL,
+	msg      TEXT NOT NULL DEFAULT '',
+	PRIMARY KEY (event_id, seq)
+);
 `,
 }
 

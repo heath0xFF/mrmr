@@ -26,7 +26,7 @@ mrmr is early-stage software. The initial vertical slice is implemented:
 - schema-constrained output with validation and bounded retries
 - deterministic first-match policy
 - stdout notification, ignore, HTTP action, emit-event (depth-capped), and generic-HTTP delegate outcomes, plus shadow mode (outcome recorded, nothing executed)
-- event traces and deduplication
+- event traces and deduplication, with every trace persisted and queryable by `mrmr inspect EVENT_ID`
 
 A generated 50-event evaluation set is included for prompt development. The required real-event golden-set quality gate has not yet been completed.
 
@@ -82,6 +82,16 @@ go run ./cmd/mrmr eval -config mrmr.yaml \
 ```
 
 Relabeling an event replaces its previous label. Exports contain complete event payloads and are ignored by Git by default; inspect and anonymize them before sharing or committing.
+
+## Inspect an event
+
+The ingest response carries the trace, but it is gone once the caller drops it. Every trace is also stored, so any event can be explained afterwards:
+
+```bash
+go run ./cmd/mrmr inspect evt_01... -config mrmr.yaml
+```
+
+The output is one JSON object with the stored event, its decisions, its executions, the ordered trace, and the human label if the event has one. Duplicates are the exception: a redelivery is never stored a second time, so the original event's trace is the explanation for both.
 
 ## Development
 

@@ -1,10 +1,11 @@
-// Package event defines the two records that flow through mrmr's pipeline:
-// the Event (what happened, normalized) and the Decision (what the model
-// thought it meant). These types are intentionally boring and dependency-
-// free — every stage of the runtime handles them, so any cleverness here
-// would be paid for everywhere. data and metadata are opaque maps: the
-// core makes no assumptions about what a source puts in them, because
-// assuming is how source-specific logic leaks into the runtime.
+// Package event defines the records that flow through mrmr's pipeline: the
+// Event (what happened, normalized), the Decision (what the model thought it
+// meant), and the TraceStep (why the runtime did what it did). These types
+// are intentionally boring and dependency-free — every stage of the runtime
+// handles them, so any cleverness here would be paid for everywhere. data
+// and metadata are opaque maps: the core makes no assumptions about what a
+// source puts in them, because assuming is how source-specific logic leaks
+// into the runtime.
 package event
 
 import (
@@ -48,6 +49,21 @@ type Decision struct {
 	Result      map[string]any `json:"result,omitempty"`
 	LatencyMs   int64          `json:"latency_ms"`
 	Error       string         `json:"error,omitempty"`
+}
+
+// TraceStep is one observable moment in an Event's journey through the
+// pipeline: receive, persist, filter, interpret, policy, outcome. The trace
+// is mrmr's answer to "why did this happen?" — it must be possible to
+// explain any outcome by reading nothing but the trace, which is why the
+// trace is durable rather than only returned to whoever posted the event.
+//
+// A step carries the validated Decision result when that is what the stage
+// produced, but never a prompt and never a raw model response: those are
+// opt-in debug capture, never normal audit data.
+type TraceStep struct {
+	At    time.Time `json:"at"`
+	Stage string    `json:"stage"`
+	Msg   string    `json:"msg,omitempty"`
 }
 
 // NewID returns a sortable unique id: prefix + hex(unix-millis + random).
