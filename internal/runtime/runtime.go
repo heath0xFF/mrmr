@@ -51,14 +51,11 @@ type Runtime struct {
 // loop, and loops get recorded and ignored, not executed.
 const maxDepth = 10
 
-// TraceStep is one observable moment in an event's journey. The trace is
-// mrmr's answer to "why did this happen?" — it must be possible to explain
-// any outcome without reading anything but the trace.
-type TraceStep struct {
-	At    time.Time `json:"at"`
-	Stage string    `json:"stage"`
-	Msg   string    `json:"msg,omitempty"`
-}
+// TraceStep is one observable moment in an event's journey. It is an alias,
+// not a distinct type: the trace is persisted next to the event it explains,
+// so the shape belongs to the domain package that storage also speaks, and
+// the runtime is merely where the steps are produced.
+type TraceStep = event.TraceStep
 
 // Response is what the caller (HTTP handler) receives: the event id, the
 // decision (if any), the outcome, and the full trace. It doubles as the
@@ -82,6 +79,31 @@ func step(t *[]TraceStep, stage, msg string) {
 // 5xx, since an un-persisted event's fate is genuinely unknown.
 func (r *Runtime) Ingest(ctx context.Context, e event.Event) (*Response, error) {
 	t := &[]TraceStep{}
+	resp, err := r.ingest(ctx, e, t)
+	if err != nil {
+		return nil, err
+	}
+	// The trace is persisted once, here, rather than at each of ingest's
+	// exits — one write, and every path is covered by construction.
+	//
+	// A duplicate is the exception: it never inserted an events row under
+	// this id, so the trace's foreign key would have nothing to point at,
+	// and there is nothing to inspect anyway — the original event's trace
+	// already tells that story. A trace write failure is reported like the
+	// pipeline's other persistence failures (the caller's 5xx): the outcome
+	// has already happened, and an outcome nobody can explain afterwards is
+	// exactly the state this table exists to prevent.
+	if !resp.Duplicate {
+		if serr := r.DB.InsertTrace(e.ID, *t); serr != nil {
+			return nil, fmt.Errorf("persist trace: %w", serr)
+		}
+	}
+	return resp, nil
+}
+
+// ingest runs the pipeline and appends to the trace as it goes. It is
+// separate from Ingest so that trace persistence has exactly one call site.
+func (r *Runtime) ingest(ctx context.Context, e event.Event, t *[]TraceStep) (*Response, error) {
 	step(t, "receive", fmt.Sprintf("type=%s source=%s", e.Type, e.Source))
 
 	rec, err := r.DB.InsertEvent(e)
