@@ -560,3 +560,46 @@ func TestIngestOverDepthCapForcedIgnore(t *testing.T) {
 		t.Errorf("model calls = %d, want 0 past the cap", calls.Load())
 	}
 }
+
+// TestIngestTraceWriteFailureStillSucceeds pins the fate-known rule: the
+// event, decision, and execution rows are durable and the outcome has fired
+// by the time the trace is written, so losing the durable trace must not
+// turn into a 500 that would claim "fate unknown" and trigger a pointless
+// retry (which would dedup-drop).
+func TestIngestTraceWriteFailureStillSucceeds(t *testing.T) {
+	url, _ := modelServer(t, `{"category":"important","importance":0.95}`)
+	rt := newTestRuntime(t, url)
+	if _, err := rt.DB.Exec(`DROP TABLE event_traces`); err != nil {
+		t.Fatalf("drop event_traces: %v", err)
+	}
+
+	resp, err := rt.Ingest(context.Background(), testEvent("gh-tracefail-1"))
+	if err != nil {
+		t.Fatalf("Ingest = err %v, want success with degraded trace", err)
+	}
+	if resp.Outcome != "notify" {
+		t.Errorf("outcome = %q, want notify (already executed)", resp.Outcome)
+	}
+	if len(resp.Trace) == 0 {
+		t.Error("response trace is empty; the in-memory trace must still go out")
+	}
+}
+
+// TestIngestExecutionWriteFailureStillSucceeds covers the same rule on the
+// execution row: the side effect has fired by the time the row is written,
+// so the request must report the outcome, not fail it.
+func TestIngestExecutionWriteFailureStillSucceeds(t *testing.T) {
+	url, _ := modelServer(t, `{"category":"important","importance":0.95}`)
+	rt := newTestRuntime(t, url)
+	if _, err := rt.DB.Exec(`DROP TABLE executions`); err != nil {
+		t.Fatalf("drop executions: %v", err)
+	}
+
+	resp, err := rt.Ingest(context.Background(), testEvent("gh-exefail-1"))
+	if err != nil {
+		t.Fatalf("Ingest = err %v, want success with degraded audit row", err)
+	}
+	if resp.Outcome != "notify" {
+		t.Errorf("outcome = %q, want notify (the side effect fired)", resp.Outcome)
+	}
+}

@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"text/template"
@@ -76,7 +77,11 @@ func step(t *[]TraceStep, stage, msg string) {
 // returns an error for a "bad" decision or outcome — a schema-invalid model
 // or a down endpoint is normal operation, recorded in the decision and trace
 // — only for persistence failures, which are the caller's (HTTP handler's)
-// 5xx, since an un-persisted event's fate is genuinely unknown.
+// — only for persistence failures on writes that happen before any outcome
+// is decided (the event row, the decision row). Once the outcome is chosen,
+// the fate is known: later failures (execution row, trace) are logged, not
+// propagated, because a 500 would claim "fate unknown" about a decided
+// outcome and a source's retry would dedup-drop into nothing.
 func (r *Runtime) Ingest(ctx context.Context, e event.Event) (*Response, error) {
 	t := &[]TraceStep{}
 	resp, err := r.ingest(ctx, e, t)
@@ -89,13 +94,14 @@ func (r *Runtime) Ingest(ctx context.Context, e event.Event) (*Response, error) 
 	// A duplicate is the exception: it never inserted an events row under
 	// this id, so the trace's foreign key would have nothing to point at,
 	// and there is nothing to inspect anyway — the original event's trace
-	// already tells that story. A trace write failure is reported like the
-	// pipeline's other persistence failures (the caller's 5xx): the outcome
-	// has already happened, and an outcome nobody can explain afterwards is
-	// exactly the state this table exists to prevent.
+	// already tells that story. A trace write failure is logged and the
+	// response returned normally: the event, decision, and execution rows
+	// are all durable and the outcome has fired, so the request succeeded
+	// — only the durable copy of the trace is lost, and the in-memory
+	// trace still goes out with the response.
 	if !resp.Duplicate {
 		if serr := r.DB.InsertTrace(e.ID, *t); serr != nil {
-			return nil, fmt.Errorf("persist trace: %w", serr)
+			log.Printf("mrmr: persist trace for %s failed (trace only in response): %v", e.ID, serr)
 		}
 	}
 	return resp, nil
@@ -122,9 +128,7 @@ func (r *Runtime) ingest(ctx context.Context, e event.Event, t *[]TraceStep) (*R
 	// infinite model-calling loop.
 	if e.Depth > maxDepth {
 		step(t, "depth", fmt.Sprintf("causal depth %d exceeds max %d; recorded but forced to ignore", e.Depth, maxDepth))
-		if serr := r.DB.InsertExecution(event.NewID("exe_"), e.ID, "", "ignore", "", "ok", "max causal depth exceeded"); serr != nil {
-			return nil, fmt.Errorf("persist execution: %w", serr)
-		}
+		r.recordExecution(e.ID, "", "ignore", "", "ok", "max causal depth exceeded")
 		step(t, "outcome", "executed ignore")
 		return &Response{EventID: e.ID, Outcome: "ignore", Trace: *t}, nil
 	}
@@ -140,9 +144,7 @@ func (r *Runtime) ingest(ctx context.Context, e event.Event, t *[]TraceStep) (*R
 		passed, reason := r.Filters.Evaluate(e)
 		if !passed {
 			step(t, "filter", "excluded: "+reason)
-			if serr := r.DB.InsertExecution(event.NewID("exe_"), e.ID, "", "ignore", "", "filtered", ""); serr != nil {
-				return nil, fmt.Errorf("persist execution: %w", serr)
-			}
+			r.recordExecution(e.ID, "", "ignore", "", "filtered", "")
 			step(t, "outcome", "executed ignore")
 			return &Response{EventID: e.ID, Outcome: "ignore", Trace: *t}, nil
 		}
@@ -215,11 +217,25 @@ func (r *Runtime) ingest(ctx context.Context, e event.Event, t *[]TraceStep) (*R
 	case then.Shadow:
 		status = "shadow"
 	}
-	if serr := r.DB.InsertExecution(event.NewID("exe_"), e.ID, dec.ID, then.Outcome(), adapterFor(then), status, execErr); serr != nil {
-		return nil, fmt.Errorf("persist execution: %w", serr)
-	}
+	// This is the one execution write on a path where a side effect may
+	// have already fired, so it must never fail the request: the outcome
+	// is decided and the response still reports it. The audit gap (no
+	// execution row) is real but a 500 would not repair it — the source's
+	// retry would dedup-drop, losing the row permanently.
+	r.recordExecution(e.ID, dec.ID, then.Outcome(), adapterFor(then), status, execErr)
 
 	return &Response{EventID: e.ID, Decision: dec, Outcome: then.Outcome(), Trace: *t}, nil
+}
+
+// recordExecution persists an execution row, degrading to a log entry on
+// failure. Every caller sits after the event row is durable and the outcome
+// is decided, so a write failure must not fail the request — a 500 would
+// claim "fate unknown" about a decided outcome and the source's retry would
+// dedup-drop, losing the row permanently anyway.
+func (r *Runtime) recordExecution(eventID, decisionID, outcome, adapter, status, execErr string) {
+	if serr := r.DB.InsertExecution(event.NewID("exe_"), eventID, decisionID, outcome, adapter, status, execErr); serr != nil {
+		log.Printf("mrmr: persist execution for %s failed: %v", eventID, serr)
+	}
 }
 
 func adapterFor(t policy.Then) string {
