@@ -27,6 +27,7 @@ mrmr is early-stage software. The initial vertical slice is implemented:
 - deterministic first-match policy
 - stdout notification, ignore, HTTP action, emit-event (depth-capped), and generic-HTTP delegate outcomes, plus shadow mode (outcome recorded, nothing executed)
 - event traces and deduplication, with every trace persisted and queryable by `mrmr inspect EVENT_ID`
+- HTTP poller sources (interval fetch, persisted cursor, JSON feeds → events)
 
 A generated 50-event evaluation set is included for prompt development. The required real-event golden-set quality gate has not yet been completed.
 
@@ -135,7 +136,7 @@ Restart=on-failure
 WantedBy=default.target
 ```
 
-Until the built-in poller lands, real events come from anything that can POST — a cron job checking a service every minute is enough to start:
+For a quick start with no code, a cron job checking a service every minute is enough to feed it:
 
 ```bash
 * * * * * curl -sf -m 5 http://model-server:8000/health >/dev/null || \
@@ -144,6 +145,24 @@ Until the built-in poller lands, real events come from anything that can POST �
 ```
 
 Events accumulate in SQLite, get labeled with `mrmr label`, and grade the interpreter via `mrmr eval` — the deployment doubles as the golden-set collector.
+
+### Polling a feed or API
+
+For sources without webhooks, configure an HTTP poller: mrmr fetches on an interval, normalizes each record into an event, and runs the same pipeline. The cursor is persisted in SQLite so restarts resume; dedup on `(source, source_event_id)` makes repeated polls harmless:
+
+```yaml
+sources:
+  - name: blog-feed
+    type: http-poller
+    url: "https://example.com/feed.json?after={{ .cursor }}"   # {{ .cursor }} is optional
+    every: 2m
+    bearer_token_env: FEED_TOKEN   # optional; token lives in the environment
+    item_path: items               # dot-path to the record array
+    cursor_field: id               # optional; dedup id + resume watermark
+    subject_field: title
+    timestamp_field: published     # RFC3339
+    event_type: rss.item.published
+```
 
 ## Development
 

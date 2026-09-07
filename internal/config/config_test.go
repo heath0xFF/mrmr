@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/heath0xff/mrmr/internal/event"
 	"github.com/heath0xff/mrmr/internal/filter"
@@ -443,5 +444,97 @@ func TestLoadBadYAMLSyntax(t *testing.T) {
 	_, err := Load(writeConfig(t, "server: [unclosed\n  bad: {"))
 	if err == nil {
 		t.Fatal("Load = nil, want parse error for invalid YAML")
+	}
+}
+
+// TestValidateSourceErrors covers the source list: names are required and
+// unique (they become Event.Source and cursor keys), the type is gated, and
+// the interval floor protects the polled target.
+func TestValidateSourceErrors(t *testing.T) {
+	valid := Source{
+		Name: "feed", Type: "http-poller", URL: "http://localhost/feed",
+		Every: time.Minute, CursorField: "id", EventType: "feed.item.published",
+	}
+	tests := []struct {
+		name   string
+		mutate func(*Source)
+		want   string
+	}{
+		{
+			name:   "missing name",
+			mutate: func(s *Source) { s.Name = "" },
+			want:   "source 1: name is required",
+		},
+		{
+			name:   "unsupported type",
+			mutate: func(s *Source) { s.Type = "mcp-poller" },
+			want:   `source "feed": type "mcp-poller" not supported`,
+		},
+		{
+			name:   "missing url",
+			mutate: func(s *Source) { s.URL = "" },
+			want:   `source "feed": url is required`,
+		},
+		{
+			name:   "interval below the floor",
+			mutate: func(s *Source) { s.Every = 500 * time.Millisecond },
+			want:   `source "feed": every must be at least 1s`,
+		},
+		{
+			name:   "missing event_type",
+			mutate: func(s *Source) { s.EventType = "" },
+			want:   `source "feed": event_type is required`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := validConfig()
+			s := valid
+			tt.mutate(&s)
+			c.Sources = []Source{s}
+			err := c.Validate()
+			if err == nil {
+				t.Fatal("Validate() = nil, want error")
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("Validate() error = %q, want containing %q", err.Error(), tt.want)
+			}
+		})
+	}
+
+	// Duplicate names fail even when both sources are otherwise valid.
+	c := validConfig()
+	c.Sources = []Source{valid, valid}
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), `duplicate name`) {
+		t.Errorf("Validate() = %v, want duplicate name error", err)
+	}
+}
+
+// TestLoadSourceYAML pins the wire format, including the duration string
+// parsing ("every: 2m"), so the documented example keeps loading.
+func TestLoadSourceYAML(t *testing.T) {
+	yamlText := minimalYAML + `
+sources:
+  - name: blog
+    type: http-poller
+    url: "http://localhost/feed.json?after={{ .cursor }}"
+    every: 2m
+    item_path: items
+    cursor_field: id
+    subject_field: title
+    event_type: rss.item.published
+`
+	path := writeConfig(t, yamlText)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.Sources) != 1 {
+		t.Fatalf("sources = %d, want 1", len(cfg.Sources))
+	}
+	s := cfg.Sources[0]
+	if s.Name != "blog" || s.Every != 2*time.Minute || s.ItemPath != "items" ||
+		s.CursorField != "id" || s.SubjectField != "title" || s.EventType != "rss.item.published" {
+		t.Errorf("source = %+v, want the documented example", s)
 	}
 }

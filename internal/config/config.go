@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -30,6 +31,23 @@ type Interpret struct {
 	Model  string       `yaml:"model"`
 	Prompt string       `yaml:"prompt"`
 	Schema model.Schema `yaml:"schema"`
+}
+
+// Source configures one data source adapter. v0.1 ships one type:
+// http-poller, which fetches a JSON endpoint on an interval and ingests each
+// record as an Event. BearerTokenEnv names an environment variable — the
+// token itself never lives in this file — and is resolved once at startup.
+type Source struct {
+	Name           string        `yaml:"name"`
+	Type           string        `yaml:"type"`
+	URL            string        `yaml:"url"`              // may reference {{ .cursor }}
+	Every          time.Duration `yaml:"every"`            // min 1s: protects the polled target
+	BearerTokenEnv string        `yaml:"bearer_token_env"` // optional
+	ItemPath       string        `yaml:"item_path"`        // optional dot-path to the record array
+	CursorField    string        `yaml:"cursor_field"`     // optional; dedup id + watermark
+	SubjectField   string        `yaml:"subject_field"`    // optional
+	TimestampField string        `yaml:"timestamp_field"`  // optional; RFC3339
+	EventType      string        `yaml:"event_type"`
 }
 
 // Agent is a delegation target. v0.1 ships only the generic HTTP adapter,
@@ -56,6 +74,9 @@ type Config struct {
 	// Endpoints live here, not in policy, so policies stay readable and
 	// agent locations change without touching rule logic.
 	Agents map[string]Agent `yaml:"agents"`
+	// Sources are pull-based ingesters; each runs its own goroutine and
+	// feeds the same pipeline as POST /api/events.
+	Sources []Source `yaml:"sources"`
 }
 
 // Load reads, parses, and validates the config at path. Defaults (addr,
@@ -180,6 +201,33 @@ func (c *Config) Validate() error {
 	for name, a := range c.Agents {
 		if a.Endpoint == "" {
 			return fmt.Errorf("config: agent %q: endpoint is required", name)
+		}
+	}
+	seenSources := map[string]bool{}
+	for i := range c.Sources {
+		s := &c.Sources[i]
+		if s.Name == "" {
+			return fmt.Errorf("config: source %d: name is required", i+1)
+		}
+		// Source names become Event.Source and cursor keys: uniqueness is
+		// what keeps two pollers from silently sharing dedup identity.
+		if seenSources[s.Name] {
+			return fmt.Errorf("config: source %q: duplicate name", s.Name)
+		}
+		seenSources[s.Name] = true
+		if s.Type != "http-poller" {
+			return fmt.Errorf("config: source %q: type %q not supported (v0.1: http-poller)", s.Name, s.Type)
+		}
+		if s.URL == "" {
+			return fmt.Errorf("config: source %q: url is required", s.Name)
+		}
+		// The floor protects the polled target from a typo like `every: 1ms`
+		// turning into a self-inflicted denial of service.
+		if s.Every < time.Second {
+			return fmt.Errorf("config: source %q: every must be at least 1s", s.Name)
+		}
+		if s.EventType == "" {
+			return fmt.Errorf("config: source %q: event_type is required", s.Name)
 		}
 	}
 	for i, r := range c.Policy.Rules {

@@ -86,7 +86,7 @@ func Open(path string) (*DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite %s: %w", path, err)
 	}
-	db.SetMaxOpenConns(1) // ponytail: single writer; SQLite is serialized anyway
+	db.SetMaxOpenConns(1) // ponytail: single writer; SQLite is serialized anyway. Callers must not hold an open rows iterator across another DB call — it will deadlock on this one connection.
 	d := &DB{db}
 	if err := d.migrate(); err != nil {
 		db.Close()
@@ -158,6 +158,13 @@ CREATE TABLE event_traces (
 	stage    TEXT NOT NULL,
 	msg      TEXT NOT NULL DEFAULT '',
 	PRIMARY KEY (event_id, seq)
+);
+`,
+	`
+CREATE TABLE source_cursors (
+	name       TEXT PRIMARY KEY,
+	cursor     TEXT NOT NULL,
+	updated_at TEXT NOT NULL
 );
 `,
 }

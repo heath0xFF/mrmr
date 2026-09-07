@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -26,6 +27,7 @@ import (
 	"github.com/heath0xff/mrmr/internal/event"
 	"github.com/heath0xff/mrmr/internal/model"
 	"github.com/heath0xff/mrmr/internal/runtime"
+	"github.com/heath0xff/mrmr/internal/source"
 	"github.com/heath0xff/mrmr/internal/storage"
 )
 
@@ -114,14 +116,32 @@ func run(args []string) error {
 	srv := &http.Server{Addr: cfg.Server.Addr, Handler: mux}
 
 	// Cancel the context on SIGINT/SIGTERM so Shutdown has a deadline and a
-	// second signal still hard-exits.
+	// second signal still hard-exits. Pollers share this context: shutdown
+	// cancels in-flight fetches and stops the tick loops.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// One goroutine per source, owned by the WaitGroup, stopped by ctx.
+	var sources sync.WaitGroup
+	for _, sc := range cfg.Sources {
+		if sc.Type != "http-poller" {
+			return fmt.Errorf("source %q: unknown type %q", sc.Name, sc.Type) // config validation should prevent this
+		}
+		p, err := source.NewHTTPPoller(sc)
+		if err != nil {
+			return err
+		}
+		sources.Add(1)
+		go func() {
+			defer sources.Done()
+			p.Run(ctx, rt)
+		}()
+	}
 
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.ListenAndServe() }()
 
-	log.Printf("mrmr listening on %s (db: %s, model: %s)", cfg.Server.Addr, cfg.DB.Path, cfg.Interpret.Model)
+	log.Printf("mrmr listening on %s (db: %s, model: %s, sources: %d)", cfg.Server.Addr, cfg.DB.Path, cfg.Interpret.Model, len(cfg.Sources))
 
 	select {
 	case err := <-errCh:
@@ -135,6 +155,16 @@ func run(args []string) error {
 	defer cancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		return fmt.Errorf("shutdown: %w", err)
+	}
+	// Pollers finish their current poll (Ingest is synchronous) or stop at
+	// the next ctx check; a wedged fetch is bounded by the client timeout,
+	// so waiting briefly is enough — a leak here would defeat shutdown.
+	waitSources := make(chan struct{})
+	go func() { sources.Wait(); close(waitSources) }()
+	select {
+	case <-waitSources:
+	case <-shutdownCtx.Done():
+		return fmt.Errorf("shutdown: pollers did not stop in time")
 	}
 	return nil
 }

@@ -56,6 +56,22 @@ interpret:
     summary:
       type: string
 
+# Pull-based sources poll a JSON endpoint on an interval and feed each
+# record through the same pipeline as POST /api/events. One goroutine per
+# source; the cursor is persisted so restarts resume where they left off,
+# and dedup on (source, source_event_id) means repolling is harmless.
+# sources:
+#   - name: blog-feed
+#     type: http-poller
+#     url: "https://example.com/feed.json?after={{ .cursor }}"   # {{ .cursor }} is optional
+#     every: 2m
+#     bearer_token_env: FEED_TOKEN        # optional; token lives in the environment
+#     item_path: items                    # dot-path to the record array
+#     cursor_field: id                    # optional; dedup id + resume watermark
+#     subject_field: title                # optional
+#     timestamp_field: published          # optional; RFC3339
+#     event_type: rss.item.published
+
 # First match wins; unmatched events fall to `default`.
 policy:
   - if:
