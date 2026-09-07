@@ -1,0 +1,17 @@
+yep, push, and then let's fix that trace-write failure
+
+---
+
+why do we need the 50 items of "golden data"?
+
+---
+
+ok so where do we stand on this project in terms of completeness?
+
+---
+
+why don't you look through my tailscale network (primarily marvin and deepthought) and give me some options on what to setup mrmr with
+
+---
+
+i would prefer to get polling built in before dogfooding. can we do that?

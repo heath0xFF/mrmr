@@ -1,0 +1,55 @@
+{
+  "cli_version": "0.10.5",
+  "checkpoint_id": "01M1YQ5A8KMWEY2FGJDBERMF8Z",
+  "session_id": "01a07d3f-17f4-71d7-b71f-62899733e9b7",
+  "strategy": "manual-commit",
+  "created_at": "2026-09-07T19:57:41.804088Z",
+  "branch": "main",
+  "checkpoints_count": 4,
+  "files_touched": [
+    "README.md"
+  ],
+  "agent": "Pi",
+  "model": "z-ai/glm-5.3-flash",
+  "turn_id": "0ca94caed265",
+  "checkpoint_transcript_start": 188,
+  "transcript_lines_at_start": 188,
+  "compact_transcript_start": 90,
+  "token_usage": {
+    "input_tokens": 19214,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 1142592,
+    "output_tokens": 11293,
+    "api_call_count": 12
+  },
+  "session_metrics": {
+    "turn_count": 7
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-09-07T19:57:41.763218Z",
+    "agent_lines": 52,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 52,
+    "total_lines_changed": 52,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 326,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.json": 90,
+        ".codex/hooks.json": 88,
+        ".firecrawl/search-nvidia-switchyard.json": 1,
+        ".pi/extensions/entire/index.ts": 147
+      }
+    }
+  ]
+}
