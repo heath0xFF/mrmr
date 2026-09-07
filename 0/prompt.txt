@@ -1,0 +1,9 @@
+continue
+
+---
+
+ok continue. i have a claude agent working as well -- so maybe we need to use the orca cli to do something?
+
+---
+
+yep, push, and then let's fix that trace-write failure
