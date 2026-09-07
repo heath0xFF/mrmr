@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.10.5",
+  "checkpoint_id": "01M1YVSGFPVJJD088QKH28RGJX",
+  "strategy": "manual-commit",
+  "branch": "main",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "cmd/mrmr/main.go",
+    "internal/config/config.go",
+    "internal/source/poller.go",
+    "internal/source/poller_test.go",
+    "internal/storage/cursors.go",
+    "internal/storage/storage.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 296894,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 10847936,
+    "output_tokens": 63680,
+    "api_call_count": 142
+  }
+}
