@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -353,5 +354,209 @@ func TestIngestFilterMissingFieldExcludes(t *testing.T) {
 	hasStages(t, resp, "receive", "persist", "filter", "outcome")
 	if calls.Load() != 0 {
 		t.Errorf("model calls = %d, want 0", calls.Load())
+	}
+}
+
+// httpTarget is an httptest server standing in for an action or agent
+// endpoint. It captures method and body and always answers 2xx.
+func httpTarget(t *testing.T) (url string, method *string, body *string, status *int) {
+	t.Helper()
+	var m, b string
+	var code int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		m, b, code = r.Method, string(raw), http.StatusOK
+		w.WriteHeader(code)
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL, &m, &b, &code
+}
+
+func TestIngestHTTPActionPostsDefaultBody(t *testing.T) {
+	targetURL, gotMethod, gotBody, _ := httpTarget(t)
+	url, _ := modelServer(t, `{"category":"important","importance":0.95}`)
+	rt := newTestRuntime(t, url)
+	rt.Policy = policy.Policy{
+		Rules: []policy.Rule{{
+			If:   map[string]any{"result.importance": "> 0.8"},
+			Then: policy.Then{Action: &policy.Action{Type: "http", URL: targetURL, Body: "{{ .result.importance }}"}},
+		}},
+		Default: policy.Then{Ignore: true},
+	}
+
+	resp, err := rt.Ingest(context.Background(), testEvent("gh-act-1"))
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if resp.Outcome != "act" {
+		t.Errorf("outcome = %q, want act", resp.Outcome)
+	}
+	if *gotMethod != http.MethodPost {
+		t.Errorf("action method = %q, want POST default", *gotMethod)
+	}
+	if *gotBody != "0.95" {
+		t.Errorf("action body = %q, want rendered template %q", *gotBody, "0.95")
+	}
+	hasStages(t, resp, "receive", "persist", "interpret", "policy", "outcome")
+}
+
+func TestIngestHTTPActionNon2xxIsError(t *testing.T) {
+	broken := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer broken.Close()
+	url, _ := modelServer(t, `{"category":"important","importance":0.95}`)
+	rt := newTestRuntime(t, url)
+	rt.Policy = policy.Policy{
+		Rules: []policy.Rule{{
+			If:   map[string]any{"result.importance": "> 0.8"},
+			Then: policy.Then{Action: &policy.Action{Type: "http", URL: broken.URL}},
+		}},
+		Default: policy.Then{Ignore: true},
+	}
+
+	resp, err := rt.Ingest(context.Background(), testEvent("gh-act-2"))
+	if err != nil {
+		t.Fatalf("Ingest: %v", err) // an action failure is recorded, not a 500
+	}
+	last := resp.Trace[len(resp.Trace)-1]
+	if last.Msg != "error: http POST "+broken.URL+": status 500" {
+		t.Errorf("last trace = %+v, want the action's status error", last)
+	}
+}
+
+func TestIngestDelegatePostsAgentPayload(t *testing.T) {
+	agentURL, _, gotBody, _ := httpTarget(t)
+	url, _ := modelServer(t, `{"category":"important","importance":0.95}`)
+	rt := newTestRuntime(t, url)
+	rt.AgentEndpoints = map[string]string{"triage": agentURL}
+	rt.Policy = policy.Policy{
+		Rules: []policy.Rule{{
+			If:   map[string]any{"result.importance": "> 0.8"},
+			Then: policy.Then{Delegate: &policy.Delegate{Agent: "triage", Prompt: "investigate this"}},
+		}},
+		Default: policy.Then{Ignore: true},
+	}
+
+	resp, err := rt.Ingest(context.Background(), testEvent("gh-del-1"))
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if resp.Outcome != "delegate" {
+		t.Errorf("outcome = %q, want delegate", resp.Outcome)
+	}
+	var payload struct {
+		EventID  string         `json:"event_id"`
+		Decision map[string]any `json:"decision"`
+		Prompt   string         `json:"prompt"`
+	}
+	if err := json.Unmarshal([]byte(*gotBody), &payload); err != nil {
+		t.Fatalf("agent payload = %q, not valid JSON: %v", *gotBody, err)
+	}
+	if payload.EventID != resp.EventID || payload.Prompt != "investigate this" || payload.Decision["importance"] != 0.95 {
+		t.Errorf("agent payload = %+v, want event id, prompt, and decision", payload)
+	}
+}
+
+func TestIngestShadowRecordsButDoesNotExecute(t *testing.T) {
+	url, _ := modelServer(t, `{"category":"important","importance":0.95}`)
+	rt := newTestRuntime(t, url)
+	rt.Policy = policy.Policy{
+		Rules: []policy.Rule{{
+			If:   map[string]any{"result.importance": "> 0.8"},
+			Then: policy.Then{Notify: &policy.Notify{Via: "stdout"}, Shadow: true},
+		}},
+		Default: policy.Then{Ignore: true},
+	}
+
+	resp, err := rt.Ingest(context.Background(), testEvent("gh-shadow-1"))
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	// The outcome is decided and recorded as if it fired...
+	if resp.Outcome != "notify" {
+		t.Errorf("outcome = %q, want notify (recorded)", resp.Outcome)
+	}
+	last := resp.Trace[len(resp.Trace)-1]
+	if last.Msg != "shadow: notify recorded but not executed" {
+		t.Errorf("last trace = %+v, want the shadow marker", last)
+	}
+	// ...and the execution row must say so, never "ok".
+	row := rt.DB.QueryRow("SELECT status FROM executions WHERE event_id = ?", resp.EventID)
+	var status string
+	if err := row.Scan(&status); err != nil {
+		t.Fatalf("query execution: %v", err)
+	}
+	if status != "shadow" {
+		t.Errorf("execution status = %q, want shadow", status)
+	}
+}
+
+// TestIngestEmitChainDepthCaps drives the full recursion path: every high-
+// importance interpretation emits a child, the child re-enters the pipeline
+// and does the same, and the chain must stop at the depth cap with the last
+// event recorded and forced to ignore — never an infinite model loop.
+// Each child's own trace lives in its child response (not bubbled into the
+// parent's), so the cap's durable evidence is asserted through SQLite.
+func TestIngestEmitChainDepthCaps(t *testing.T) {
+	url, calls := modelServer(t, `{"category":"important","importance":0.95}`)
+	rt := newTestRuntime(t, url)
+	rt.Policy = policy.Policy{
+		Rules: []policy.Rule{{
+			If:   map[string]any{"result.importance": "> 0.8"},
+			Then: policy.Then{Action: &policy.Action{Type: "emit", EventType: "chain.child"}},
+		}},
+		Default: policy.Then{Ignore: true},
+	}
+
+	resp, err := rt.Ingest(context.Background(), testEvent("gh-emit-1"))
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if resp.Outcome != "act" {
+		t.Errorf("outcome = %q, want act (the emit itself)", resp.Outcome)
+	}
+	// The parent trace shows its own single emit; the chain's depth lives
+	// in the database rows, asserted below.
+	hasStages(t, resp, "receive", "persist", "interpret", "policy", "emit", "emit", "outcome")
+
+	// Children at depths 1..maxDepth were emitted, plus the one event at
+	// maxDepth+1 that the cap recorded without interpreting. The model ran
+	// once per interpreted event: depths 0..maxDepth.
+	var emitted int
+	if err := rt.DB.QueryRow(`SELECT COUNT(*) FROM events WHERE source = 'mrmr'`).Scan(&emitted); err != nil {
+		t.Fatalf("count emitted: %v", err)
+	}
+	if emitted != maxDepth+1 {
+		t.Errorf("emitted events = %d, want %d", emitted, maxDepth+1)
+	}
+	var capped int
+	if err := rt.DB.QueryRow(`SELECT COUNT(*) FROM executions WHERE error = 'max causal depth exceeded'`).Scan(&capped); err != nil {
+		t.Fatalf("count capped executions: %v", err)
+	}
+	if capped != 1 {
+		t.Errorf("depth-capped executions = %d, want 1", capped)
+	}
+	if calls.Load() != int32(maxDepth+1) {
+		t.Errorf("model calls = %d, want %d (depths 0..%d)", calls.Load(), maxDepth+1, maxDepth)
+	}
+}
+
+func TestIngestOverDepthCapForcedIgnore(t *testing.T) {
+	url, calls := modelServer(t, `{"category":"important","importance":0.95}`)
+	rt := newTestRuntime(t, url)
+
+	e := testEvent("gh-depth-1")
+	e.Depth = maxDepth + 1
+	resp, err := rt.Ingest(context.Background(), e)
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if resp.Outcome != "ignore" {
+		t.Errorf("outcome = %q, want ignore", resp.Outcome)
+	}
+	hasStages(t, resp, "receive", "persist", "depth", "outcome")
+	if calls.Load() != 0 {
+		t.Errorf("model calls = %d, want 0 past the cap", calls.Load())
 	}
 }

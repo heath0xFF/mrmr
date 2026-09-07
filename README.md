@@ -25,7 +25,7 @@ mrmr is early-stage software. The initial vertical slice is implemented:
 - OpenAI-compatible model interpretation
 - schema-constrained output with validation and bounded retries
 - deterministic first-match policy
-- stdout notification and ignore outcomes
+- stdout notification, ignore, HTTP action, emit-event (depth-capped), and generic-HTTP delegate outcomes, plus shadow mode (outcome recorded, nothing executed)
 - event traces and deduplication
 
 A generated 50-event evaluation set is included for prompt development. The required real-event golden-set quality gate has not yet been completed.

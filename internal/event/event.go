@@ -27,6 +27,11 @@ type Event struct {
 	Timestamp time.Time      `json:"timestamp"` // event time, UTC
 	Data      map[string]any `json:"data,omitempty"`
 	Metadata  map[string]any `json:"metadata,omitempty"`
+	// Depth is the causal hop count for events mrmr emitted itself
+	// (emit-event actions, delegated-agent completions). Externally sourced
+	// events are 0; each emit increments. The runtime forces ignore past its
+	// max so a flow pair that emits into each other cannot recurse forever.
+	Depth int `json:"depth,omitempty"`
 }
 
 // Decision is the validated result of interpreting an Event. Status is the

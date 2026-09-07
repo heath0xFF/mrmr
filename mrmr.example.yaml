@@ -59,12 +59,42 @@ interpret:
 # First match wins; unmatched events fall to `default`.
 policy:
   - if:
-      result.importance: ">= 0.8"
-      result.requires_action: true
+      result.category: incident
+      result.confidence: "> 0.85"
     then:
       notify:
         via: stdout
         message: "{{ .result.summary }}"
 
+  # Bounded deterministic action (v0.1: http, emit):
+  # then:
+  #   action:
+  #     type: http
+  #     method: POST
+  #     url: http://service.local/restart
+  #     body: '{{ .result.summary }}'
+
+  # Emit a new event back into the runtime (recursion is depth-capped):
+  # then:
+  #   action:
+  #     type: emit
+  #     event_type: incident.escalated
+
+  # Delegate to an agent defined under `agents` below:
+  # then:
+  #   delegate:
+  #     agent: triage
+  #     prompt: |-
+  #       Investigate this event and determine whether I need to act.
+
+agents:
+  # Generic HTTP agent: mrmr POSTs {event_id, decision, prompt}; 2xx = accepted.
+  triage:
+    endpoint: http://localhost:9000/tasks
+
 default:
   ignore: true
+  # Shadow mode: the outcome is decided and recorded but nothing executes —
+  # how a new flow earns trust before going live:
+  # default:
+  #   shadow: true

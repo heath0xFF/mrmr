@@ -97,6 +97,12 @@ func run(args []string) error {
 		Policy:   cfg.Policy,
 		Filters:  cfg.Filter,
 	}
+	// Resolve delegation endpoints once at startup; policy rules reference
+	// agents by name only.
+	rt.AgentEndpoints = make(map[string]string, len(cfg.Agents))
+	for name, a := range cfg.Agents {
+		rt.AgentEndpoints[name] = a.Endpoint
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/events", eventsHandler(rt))

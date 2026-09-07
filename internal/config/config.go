@@ -32,6 +32,13 @@ type Interpret struct {
 	Schema model.Schema `yaml:"schema"`
 }
 
+// Agent is a delegation target. v0.1 ships only the generic HTTP adapter,
+// so there is no type field yet: every agent is an HTTP endpoint that
+// receives {event_id, decision, prompt} and returns 2xx.
+type Agent struct {
+	Endpoint string `yaml:"endpoint"`
+}
+
 type Config struct {
 	Server Server `yaml:"server"`
 	DB     DB     `yaml:"db"`
@@ -45,6 +52,10 @@ type Config struct {
 	// Policy is inlined so the YAML reads exactly like IMPLEMENTATION.md:
 	// a top-level `policy:` list plus a sibling `default:`.
 	Policy policy.Policy `yaml:"policy,inline"`
+	// Agents are delegation targets referenced by name from policy rules.
+	// Endpoints live here, not in policy, so policies stay readable and
+	// agent locations change without touching rule logic.
+	Agents map[string]Agent `yaml:"agents"`
 }
 
 // Load reads, parses, and validates the config at path. Defaults (addr,
@@ -120,20 +131,56 @@ func (c *Config) Validate() error {
 	}
 
 	validateThen := func(t policy.Then, where string) error {
-		// A rule that sets both notify and ignore is almost certainly a YAML
-		// typo (a leftover ignore under a new notify). Rather than picking a
+		// A rule that sets several outcomes is almost certainly a YAML typo
+		// (a leftover ignore under a new notify). Rather than picking a
 		// winner, reject it: ambiguity in outcome selection is exactly the
 		// kind of thing policy must never have.
-		if t.Notify != nil && t.Ignore {
-			return fmt.Errorf("config: %s: set either notify or ignore, not both", where)
+		set := 0
+		for _, b := range []bool{t.Notify != nil, t.Action != nil, t.Delegate != nil, t.Ignore} {
+			if b {
+				set++
+			}
+		}
+		if set > 1 {
+			return fmt.Errorf("config: %s: set at most one of notify, action, delegate, ignore", where)
 		}
 		if t.Notify != nil && t.Notify.Via != "stdout" {
 			return fmt.Errorf("config: %s: notify.via %q not supported (v0.1: stdout)", where, t.Notify.Via)
 		}
-		if t.Notify == nil && !t.Ignore {
-			return fmt.Errorf("config: %s: must set notify or ignore: true", where)
+		if t.Action != nil {
+			switch t.Action.Type {
+			case "http":
+				if t.Action.URL == "" {
+					return fmt.Errorf("config: %s: action.url is required for type http", where)
+				}
+			case "emit":
+				if t.Action.EventType == "" {
+					return fmt.Errorf("config: %s: action.event_type is required for type emit", where)
+				}
+			default:
+				return fmt.Errorf("config: %s: action.type %q not supported (v0.1: http, emit)", where, t.Action.Type)
+			}
+		}
+		if t.Delegate != nil {
+			if t.Delegate.Agent == "" {
+				return fmt.Errorf("config: %s: delegate.agent is required", where)
+			}
+			// The reference is resolved now, at validation time, so a typo'd
+			// agent name fails startup instead of surfacing as a mid-flight
+			// "unknown agent" execution error on some future event.
+			if _, ok := c.Agents[t.Delegate.Agent]; !ok {
+				return fmt.Errorf("config: %s: delegate.agent %q not defined in agents", where, t.Delegate.Agent)
+			}
+		}
+		if set == 0 && !t.Shadow {
+			return fmt.Errorf("config: %s: must set notify, action, delegate, ignore: true, or shadow: true", where)
 		}
 		return nil
+	}
+	for name, a := range c.Agents {
+		if a.Endpoint == "" {
+			return fmt.Errorf("config: agent %q: endpoint is required", name)
+		}
 	}
 	for i, r := range c.Policy.Rules {
 		if len(r.If) == 0 {

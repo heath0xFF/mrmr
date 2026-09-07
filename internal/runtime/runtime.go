@@ -13,6 +13,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"strings"
 	"text/template"
 	"time"
@@ -36,7 +38,18 @@ type Runtime struct {
 	Schema   model.Schema
 	Policy   policy.Policy
 	Filters  filter.List
+	// AgentEndpoints maps a policy delegate.agent name to its HTTP endpoint.
+	// Resolved at startup from config so policy rules never carry URLs.
+	AgentEndpoints map[string]string
+	// HTTP is the client for action/delegate side effects. Nil means a
+	// default 10s timeout — outbound effects must be bounded, never hang
+	// the synchronous ingest path.
+	HTTP *http.Client
 }
+
+// maxDepth caps emit-event recursion: a causal chain longer than this is a
+// loop, and loops get recorded and ignored, not executed.
+const maxDepth = 10
 
 // TraceStep is one observable moment in an event's journey. The trace is
 // mrmr's answer to "why did this happen?" — it must be possible to explain
@@ -80,6 +93,19 @@ func (r *Runtime) Ingest(ctx context.Context, e event.Event) (*Response, error) 
 		return &Response{EventID: e.ID, Duplicate: true, Trace: *t}, nil
 	}
 	step(t, "persist", "event stored")
+
+	// Recursion guard for mrmr-emitted events. The event is durable and
+	// traceable, but past the depth cap it is forced to ignore: a flow pair
+	// emitting into each other must surface as ignore rows here, not as an
+	// infinite model-calling loop.
+	if e.Depth > maxDepth {
+		step(t, "depth", fmt.Sprintf("causal depth %d exceeds max %d; recorded but forced to ignore", e.Depth, maxDepth))
+		if serr := r.DB.InsertExecution(event.NewID("exe_"), e.ID, "", "ignore", "", "ok", "max causal depth exceeded"); serr != nil {
+			return nil, fmt.Errorf("persist execution: %w", serr)
+		}
+		step(t, "outcome", "executed ignore")
+		return &Response{EventID: e.ID, Outcome: "ignore", Trace: *t}, nil
+	}
 
 	// Filters run after the event is durable and before any model
 	// call: they are the cost gate. An excluded event produces no
@@ -146,13 +172,28 @@ func (r *Runtime) Ingest(ctx context.Context, e event.Event) (*Response, error) 
 		step(t, "policy", "routed to ignore ("+dec.Status+" decision)")
 	}
 
-	execErr := r.execute(then, dec)
+	// Shadow records the outcome as if it had fired but executes nothing —
+	// how a new flow earns trust before going live. Promotion is later a
+	// config change, not a rewrite.
+	execErr := ""
+	if then.Shadow {
+		step(t, "outcome", "shadow: "+then.Outcome()+" recorded but not executed")
+	} else {
+		execErr = r.execute(ctx, then, dec, e, t)
+	}
 	if execErr != "" {
 		step(t, "outcome", "error: "+execErr)
-	} else {
+	} else if !then.Shadow {
 		step(t, "outcome", "executed "+then.Outcome())
 	}
-	if serr := r.DB.InsertExecution(event.NewID("exe_"), e.ID, dec.ID, then.Outcome(), adapterFor(then), statusFor(execErr), execErr); serr != nil {
+	status := "ok"
+	switch {
+	case execErr != "":
+		status = "error"
+	case then.Shadow:
+		status = "shadow"
+	}
+	if serr := r.DB.InsertExecution(event.NewID("exe_"), e.ID, dec.ID, then.Outcome(), adapterFor(then), status, execErr); serr != nil {
 		return nil, fmt.Errorf("persist execution: %w", serr)
 	}
 
@@ -160,31 +201,111 @@ func (r *Runtime) Ingest(ctx context.Context, e event.Event) (*Response, error) 
 }
 
 func adapterFor(t policy.Then) string {
-	if t.Notify != nil {
+	switch {
+	case t.Notify != nil:
 		return t.Notify.Via
+	case t.Action != nil:
+		return t.Action.Type
+	case t.Delegate != nil:
+		return t.Delegate.Agent
 	}
 	return ""
-}
-
-func statusFor(execErr string) string {
-	if execErr == "" {
-		return "ok"
-	}
-	return "error"
 }
 
 // execute performs the outcome's side effect and returns "" on success.
 // Ignore is a success — most events should end here; suppressing noise is
-// half the point of ambient AI.
-func (r *Runtime) execute(t policy.Then, dec *event.Decision) string {
-	if t.Notify == nil {
-		return "" // ignore is a success
+// half the point of ambient AI. Emit recursion is synchronous by design:
+// it is depth-capped, so no goroutines, no queue, nothing to leak.
+func (r *Runtime) execute(ctx context.Context, t policy.Then, dec *event.Decision, parent event.Event, tr *[]TraceStep) string {
+	switch {
+	case t.Notify != nil:
+		if t.Notify.Via != "stdout" {
+			return fmt.Sprintf("unsupported notify via %q", t.Notify.Via) // config validation should prevent this
+		}
+		fmt.Println(renderMessage(t.Notify.Message, dec))
+		return ""
+
+	case t.Action != nil:
+		switch t.Action.Type {
+		case "http":
+			method := t.Action.Method
+			if method == "" {
+				method = http.MethodPost
+			}
+			// Body template over the decision; empty body is the full result
+			// JSON, same default as notify, so a bare action is still useful.
+			return r.do(ctx, method, t.Action.URL, renderMessage(t.Action.Body, dec))
+		case "emit":
+			// The decision result becomes the child's data — the child flow's
+			// interpreter judges meaning, it does not re-parse the parent's
+			// decision row. ponytail: (source, source_event_id) = (mrmr,
+			// parent id) means one emit per parent; multiple emit rules on one
+			// flow would dedup-collide. Split flows if that's ever needed.
+			child := event.Event{
+				ID:        event.NewID("evt_"),
+				Type:      t.Action.EventType,
+				Source:    "mrmr",
+				Timestamp: time.Now().UTC(),
+				Data:      dec.Result,
+				Metadata:  map[string]any{"source_event_id": parent.ID},
+				Depth:     parent.Depth + 1,
+			}
+			step(tr, "emit", "emitted "+child.ID+" type="+child.Type+" depth="+fmt.Sprint(child.Depth))
+			resp, err := r.Ingest(ctx, child)
+			if err != nil {
+				return fmt.Sprintf("emit: %v", err)
+			}
+			step(tr, "emit", "child outcome "+resp.Outcome)
+			return ""
+		}
+		return fmt.Sprintf("unsupported action type %q", t.Action.Type) // config validation should prevent this
+
+	case t.Delegate != nil:
+		endpoint, ok := r.AgentEndpoints[t.Delegate.Agent]
+		if !ok {
+			return fmt.Sprintf("unknown agent %q", t.Delegate.Agent) // config validation should prevent this
+		}
+		// Generic HTTP agent contract: one POST, JSON payload, 2xx means
+		// accepted. The agent's work is its own business; mrmr records that
+		// it delegated, to whom, and why.
+		payload, _ := json.Marshal(struct {
+			EventID  string         `json:"event_id"`
+			Decision map[string]any `json:"decision"`
+			Prompt   string         `json:"prompt"`
+		}{dec.EventID, dec.Result, t.Delegate.Prompt})
+		return r.do(ctx, http.MethodPost, endpoint, string(payload))
 	}
-	if t.Notify.Via != "stdout" {
-		return fmt.Sprintf("unsupported notify via %q", t.Notify.Via) // config validation should prevent this
+	return "" // ignore is a success
+}
+
+// do sends one bounded HTTP side effect and returns "" on a 2xx. The body
+// is drained (bounded) so the connection is reusable; response content is
+// not interpreted — actions are fire-and-record, not request/response.
+func (r *Runtime) do(ctx context.Context, method, url, body string) string {
+	req, err := http.NewRequestWithContext(ctx, method, url, strings.NewReader(body))
+	if err != nil {
+		return fmt.Sprintf("build request: %v", err)
 	}
-	fmt.Println(renderMessage(t.Notify.Message, dec))
+	if body != "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := r.httpClient().Do(req)
+	if err != nil {
+		return fmt.Sprintf("http %s %s: %v", method, url, err)
+	}
+	defer resp.Body.Close()
+	io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16))
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return fmt.Sprintf("http %s %s: status %d", method, url, resp.StatusCode)
+	}
 	return ""
+}
+
+func (r *Runtime) httpClient() *http.Client {
+	if r.HTTP != nil {
+		return r.HTTP
+	}
+	return &http.Client{Timeout: 10 * time.Second}
 }
 
 // renderMessage applies the notify template over the decision result.

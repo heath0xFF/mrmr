@@ -43,6 +43,7 @@ func validConfig() *Config {
 			}},
 			Default: policy.Then{Ignore: true},
 		},
+		Agents: map[string]Agent{"triage": {Endpoint: "http://localhost:9000/tasks"}},
 	}
 }
 
@@ -139,25 +140,67 @@ func TestValidateErrors(t *testing.T) {
 			want: `default: notify.via "sms" not supported`,
 		},
 		{
-			name: "rule with neither notify nor ignore",
+			name: "rule with neither outcome nor shadow",
 			mutate: func(c *Config) {
 				c.Policy.Rules[0].Then = policy.Then{}
 			},
-			want: "policy rule 1: must set notify or ignore",
+			want: "policy rule 1: must set notify, action, delegate, ignore: true, or shadow: true",
 		},
 		{
 			name: "rule with both notify and ignore",
 			mutate: func(c *Config) {
 				c.Policy.Rules[0].Then = policy.Then{Notify: &policy.Notify{Via: "stdout"}, Ignore: true}
 			},
-			want: "policy rule 1: set either notify or ignore, not both",
+			want: "policy rule 1: set at most one of notify, action, delegate, ignore",
+		},
+		{
+			name: "rule with unsupported action type",
+			mutate: func(c *Config) {
+				c.Policy.Rules[0].Then = policy.Then{Action: &policy.Action{Type: "exec", URL: "http://x"}}
+			},
+			want: `policy rule 1: action.type "exec" not supported`,
+		},
+		{
+			name: "rule with http action and no url",
+			mutate: func(c *Config) {
+				c.Policy.Rules[0].Then = policy.Then{Action: &policy.Action{Type: "http"}}
+			},
+			want: "policy rule 1: action.url is required for type http",
+		},
+		{
+			name: "rule with emit action and no event_type",
+			mutate: func(c *Config) {
+				c.Policy.Rules[0].Then = policy.Then{Action: &policy.Action{Type: "emit"}}
+			},
+			want: "policy rule 1: action.event_type is required for type emit",
+		},
+		{
+			name: "rule delegating to an unknown agent",
+			mutate: func(c *Config) {
+				c.Policy.Rules[0].Then = policy.Then{Delegate: &policy.Delegate{Agent: "nope"}}
+			},
+			want: `policy rule 1: delegate.agent "nope" not defined in agents`,
+		},
+		{
+			name: "agent without endpoint",
+			mutate: func(c *Config) {
+				c.Agents["triage"] = Agent{}
+			},
+			want: `config: agent "triage": endpoint is required`,
 		},
 		{
 			name: "default with both notify and ignore",
 			mutate: func(c *Config) {
 				c.Policy.Default = policy.Then{Notify: &policy.Notify{Via: "stdout"}, Ignore: true}
 			},
-			want: "default: set either notify or ignore, not both",
+			want: "default: set at most one of notify, action, delegate, ignore",
+		},
+		{
+			name: "default with neither outcome nor shadow",
+			mutate: func(c *Config) {
+				c.Policy.Default = policy.Then{}
+			},
+			want: "default: must set notify, action, delegate, ignore: true, or shadow: true",
 		},
 		{
 			name:   "filter with unknown op",
@@ -321,17 +364,17 @@ func TestLoadExampleConfig(t *testing.T) {
 		t.Errorf("importance bounds = %v/%v, want 0/1", importance.Minimum, importance.Maximum)
 	}
 
-	// The shipped example must route an actionable event at the configured
-	// threshold to notify. Pin both sides of the boundary in the file users
-	// copy: importance 0.8 must notify (a strict "> 0.8" drops it into
-	// default ignore) and 0.79 must not (the threshold is 0.8, not lower).
-	// This catches a yaml revert that the policy package's operator test
-	// cannot see.
-	if then, _ := cfg.Policy.Evaluate(map[string]any{"importance": 0.8, "requires_action": true}); then.Outcome() != "notify" {
-		t.Errorf("importance 0.8 + requires_action = %s, want notify at the inclusive threshold", then.Outcome())
+	// The shipped example must route an incident with confidence above the
+	// configured threshold to notify, and an incident below it to default
+	// ignore. Pin both sides of the boundary in the file users copy.
+	if then, _ := cfg.Policy.Evaluate(map[string]any{"category": "incident", "confidence": 0.86}); then.Outcome() != "notify" {
+		t.Errorf("incident 0.86 = %s, want notify above the threshold", then.Outcome())
 	}
-	if then, _ := cfg.Policy.Evaluate(map[string]any{"importance": 0.79, "requires_action": true}); then.Outcome() != "ignore" {
-		t.Errorf("importance 0.79 + requires_action = %s, want ignore below the threshold", then.Outcome())
+	if then, _ := cfg.Policy.Evaluate(map[string]any{"category": "incident", "confidence": 0.84}); then.Outcome() != "ignore" {
+		t.Errorf("incident 0.84 = %s, want ignore below the threshold", then.Outcome())
+	}
+	if len(cfg.Agents) != 1 || cfg.Agents["triage"].Endpoint != "http://localhost:9000/tasks" {
+		t.Errorf("example agents = %v, want one triage agent", cfg.Agents)
 	}
 }
 

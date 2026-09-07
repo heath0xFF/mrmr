@@ -22,15 +22,47 @@ type Notify struct {
 	Message string `yaml:"message"` // Go template over {result: ...}; empty = summary default
 }
 
-// Then is the selected outcome for an event. Exactly one action is set;
-// config validation enforces that, and the runtime trusts it.
+// Action is a bounded deterministic action. Type http sends an HTTP request
+// (Method defaults to POST; Body is a Go template over the decision, default
+// the full result JSON). Type emit re-ingests a new Event into the runtime
+// (EventType names it; the decision result becomes its data) — the recursion
+// guard lives in the runtime, not here.
+type Action struct {
+	Type      string `yaml:"type"`
+	Method    string `yaml:"method"`
+	URL       string `yaml:"url"`
+	Body      string `yaml:"body"`
+	EventType string `yaml:"event_type"` // emit only
+}
+
+// Delegate hands the event to a more capable agent via a generic HTTP
+// endpoint. Agent names an entry in the config's `agents:` map; the runtime
+// resolves it to an endpoint, so policy never carries URLs.
+type Delegate struct {
+	Agent  string `yaml:"agent"`
+	Prompt string `yaml:"prompt"`
+}
+
+// Then is the selected outcome for an event. At most one of Notify, Action,
+// Delegate, Ignore is set; config validation enforces that, and the runtime
+// trusts it. Shadow is an orthogonal modifier: the outcome is decided and
+// recorded exactly as it would fire, but no side effect leaves the runtime —
+// that is how a new flow earns trust before going live. Shadow alone (no
+// outcome) means ignore.
 type Then struct {
-	Notify *Notify `yaml:"notify"`
-	Ignore bool    `yaml:"ignore"`
+	Notify   *Notify   `yaml:"notify"`
+	Action   *Action   `yaml:"action"`
+	Delegate *Delegate `yaml:"delegate"`
+	Ignore   bool      `yaml:"ignore"`
+	Shadow   bool      `yaml:"shadow"`
 }
 
 func (t Then) Outcome() string {
 	switch {
+	case t.Action != nil:
+		return "act"
+	case t.Delegate != nil:
+		return "delegate"
 	case t.Notify != nil:
 		return "notify"
 	default:
