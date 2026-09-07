@@ -93,6 +93,58 @@ go run ./cmd/mrmr inspect evt_01... -config mrmr.yaml
 
 The output is one JSON object with the stored event, its decisions, its executions, the ordered trace, and the human label if the event has one. Duplicates are the exception: a redelivery is never stored a second time, so the original event's trace is the explanation for both.
 
+## Deploy to a home server
+
+mrmr is a single static binary with SQLite storage, so the typical deployment is one small always-on box (home server, mini PC, Raspberry Pi) plus any OpenAI-compatible model endpoint already on the network:
+
+```bash
+# Build for the target from anywhere.
+GOOS=linux GOARCH=amd64 go build -o mrmr ./cmd/mrmr
+scp mrmr mrmr.yaml home-server:~/mrmr/
+```
+
+Point the config at the model server and keep the HTTP API tailnet- or LAN-only — the runtime has no authentication:
+
+```yaml
+server:
+  addr: 100.x.y.z:4242   # bind to the machine's tailnet/LAN address
+
+db:
+  path: /home/you/mrmr/mrmr.db
+
+models:
+  fast-local:
+    provider: openai-compatible
+    base_url: http://model-server:8000/v1
+    model: local-model
+```
+
+Run it as a systemd user unit:
+
+```ini
+# ~/.config/systemd/user/mrmr.service
+[Unit]
+Description=mrmr ambient event runtime
+After=network-online.target
+
+[Service]
+ExecStart=%h/mrmr/mrmr run -config %h/mrmr/mrmr.yaml
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
+```
+
+Until the built-in poller lands, real events come from anything that can POST — a cron job checking a service every minute is enough to start:
+
+```bash
+* * * * * curl -sf -m 5 http://model-server:8000/health >/dev/null || \
+  curl -sf http://home-server:4242/api/events -H 'Content-Type: application/json' \
+       -d '{"type":"service.unhealthy","source":"cron","subject":"model-server","data":{"service":"model-api"}}'
+```
+
+Events accumulate in SQLite, get labeled with `mrmr label`, and grade the interpreter via `mrmr eval` — the deployment doubles as the golden-set collector.
+
 ## Development
 
 ```bash
