@@ -30,3 +30,7 @@ walk me through this systemd journal part of it... seems like an external script
 ---
 
 ok yeah build it.
+
+---
+
+ok let's push what we have to github.
