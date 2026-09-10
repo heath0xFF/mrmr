@@ -1,0 +1,36 @@
+can you tell me if mrmr is ready for mcp polling in this project?
+
+---
+
+ok good to know. 
+
+i think for right now what i want is a full update to the readme of this project. specifically i think i want to create a diagram with a bit more detail.
+
+---
+
+ok one thing i also want to do with this is enable someone's agent to be able to set this up for them. how do we do that?
+
+---
+
+ok set that up. let's make a SETUP.md
+
+---
+
+ok given this context, what's the next sliceable piece of this that we can build before i get it set up on marvin (feel free to scope marvin out to see if there is something worth setting up as an ingress target for mrmr as well )
+
+---
+
+>  The HTTP poller’s cursor-advancement bug deserves its own small correctness patch before relying on incremental HTTP feeds. It needn’t block this journal recipe,
+ which uses the existing POST endpoint.
+
+let's fix this. 
+
+walk me through this systemd journal part of it... seems like an external script to mrmr? put yourself in the shoes of the user. they'd have to install and start mrmr and then set up another script? that's... not good devex
+
+---
+
+ok yeah build it.
+
+---
+
+ok let's push what we have to github.
