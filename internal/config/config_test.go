@@ -510,6 +510,63 @@ func TestValidateSourceErrors(t *testing.T) {
 	}
 }
 
+func TestJournalSourceConfig(t *testing.T) {
+	// Load the actual user-facing recipe, not just a similar test fixture.
+	recipe, err := Load(filepath.Join("..", "..", "recipes", "homelab-journal", "mrmr.example.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rule := range recipe.Policy.Rules {
+		if !rule.Then.Shadow {
+			t.Fatal("journal dogfood recipe must not execute effects")
+		}
+	}
+	if !recipe.Policy.Default.Ignore {
+		t.Fatal("journal recipe default must ignore")
+	}
+	text := minimalYAML + `
+sources:
+  - name: services
+    type: systemd-journal
+    every: 30s
+    units: [plexmediaserver.service, lfm25.service]
+    priority: warning
+    event_type: system.service.warning
+`
+	cfg, err := Load(writeConfig(t, text))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Sources[0].Every != 30*time.Second || len(cfg.Sources[0].Units) != 2 {
+		t.Fatal("documented journal source did not load")
+	}
+	for _, tc := range []struct {
+		name string
+		edit func(*Source)
+	}{
+		{"no units", func(s *Source) { s.Units = nil }},
+		{"wildcard", func(s *Source) { s.Units = []string{"*.service"} }},
+		{"option", func(s *Source) { s.Units = []string{"--user.service"} }},
+		{"path", func(s *Source) { s.Units = []string{"../foo.service"} }},
+		{"duplicate", func(s *Source) { s.Units = []string{"foo.service", "foo.service"} }},
+		{"missing priority", func(s *Source) { s.Priority = "" }},
+		{"priority range", func(s *Source) { s.Priority = "info..debug" }},
+		{"http fields", func(s *Source) { s.URL = "http://localhost/feed" }},
+		{"no interval", func(s *Source) { s.Every = 0 }},
+		{"no event type", func(s *Source) { s.EventType = "" }},
+		{"journal fields on HTTP", func(s *Source) { s.Type = "http-poller"; s.URL = "http://localhost/feed" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := *cfg
+			c.Sources = []Source{cfg.Sources[0]}
+			tc.edit(&c.Sources[0])
+			if err := c.Validate(); err == nil {
+				t.Fatal("want invalid source error")
+			}
+		})
+	}
+}
+
 // TestLoadSourceYAML pins the wire format, including the duration string
 // parsing ("every: 2m"), so the documented example keeps loading.
 func TestLoadSourceYAML(t *testing.T) {

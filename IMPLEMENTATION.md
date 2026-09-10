@@ -791,8 +791,16 @@ Poll state should be persisted so restarts are safe.
 
 Two built-in pull adapters cover most of it: a generic HTTP poller
 (cursor-based REST/JSON) and the MCP poller described in the MCP section
-(SaaS products that only expose MCP). Anything more specific is a recipe,
-not a source implementation.
+(SaaS products that only expose MCP). Integration-specific configuration
+belongs in recipes rather than custom source implementations.
+
+The local Linux system journal is also a built-in source adapter, not a
+user-maintained forwarding script. `systemd-journal` owns bounded journalctl
+reads, exact cursor verification, unit/severity filtering, and shutdown;
+recipes supply the system-unit allowlist, model schema, and shadow policy.
+First activation starts at the current tail; a missing checkpoint never
+silently resets it. User journals and historical backfill are not part of
+the initial slice.
 
 ---
 
@@ -1551,6 +1559,7 @@ Slack
 Jira
 filesystem
 Tailscale
+systemd-journal source (local Linux system units)
 mcp-poller source (Superhuman-style SaaS via MCP)
 ```
 

@@ -8,6 +8,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -17,6 +18,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/heath0xff/mrmr/internal/config"
 	"github.com/heath0xff/mrmr/internal/model"
 	"github.com/heath0xff/mrmr/internal/policy"
 	"github.com/heath0xff/mrmr/internal/runtime"
@@ -94,6 +96,26 @@ func post(t *testing.T, h http.HandlerFunc, contentType string, body string) *ht
 	rec := httptest.NewRecorder()
 	h(rec, req)
 	return rec
+}
+
+// A failed later source must not activate an earlier poller. In particular,
+// journal permission/platform failures must not leave effects running during
+// a startup that the user was told failed.
+func TestPrepareSourcesDoesNotActivatePartialConfig(t *testing.T) {
+	var calls atomic.Int32
+	feed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		fmt.Fprint(w, `[]`)
+	}))
+	defer feed.Close()
+	t.Setenv("PATH", t.TempDir()) // missing journalctl on Linux, platform error elsewhere
+	runners, err := prepareSources(context.Background(), []config.Source{
+		{Name: "http", Type: "http-poller", URL: feed.URL},
+		{Name: "journal", Type: "systemd-journal"},
+	}, nil)
+	if err == nil || runners != nil || calls.Load() != 0 {
+		t.Fatalf("partial activation: runners=%d, err=%v, calls=%d", len(runners), err, calls.Load())
+	}
 }
 
 func TestEventsHandlerValidEvent(t *testing.T) {

@@ -1,7 +1,7 @@
 // Package source hosts source adapters: the code that watches the outside
 // world and emits normalized Events. v0.1's only ingress was POST /api/events;
-// the HTTP poller adds pull-based ingestion for feeds and APIs that have no
-// webhooks. A poller is deliberately dumb: it fetches, normalizes items into
+// HTTP polling and the Linux system-journal reader add pull-based ingestion.
+// A source is deliberately dumb: it fetches, normalizes items into
 // Events, and hands each one to the ordinary Ingest pipeline — it never
 // interprets, filters, or routes.
 //

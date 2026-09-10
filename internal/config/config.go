@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"regexp"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -33,10 +35,10 @@ type Interpret struct {
 	Schema model.Schema `yaml:"schema"`
 }
 
-// Source configures one data source adapter. v0.1 ships one type:
-// http-poller, which fetches a JSON endpoint on an interval and ingests each
-// record as an Event. BearerTokenEnv names an environment variable — the
-// token itself never lives in this file — and is resolved once at startup.
+// Source configures a built-in pull adapter. Common fields name its events
+// and schedule; adapter-specific fields are rejected on the wrong type so
+// a misplaced option cannot silently broaden ingestion. Secrets are env
+// references, never values stored in this configuration.
 type Source struct {
 	Name           string        `yaml:"name"`
 	Type           string        `yaml:"type"`
@@ -48,6 +50,25 @@ type Source struct {
 	SubjectField   string        `yaml:"subject_field"`    // optional
 	TimestampField string        `yaml:"timestamp_field"`  // optional; RFC3339
 	EventType      string        `yaml:"event_type"`
+	Units          []string      `yaml:"units"`    // systemd-journal: exact system unit names
+	Priority       string        `yaml:"priority"` // systemd-journal: this severity or higher
+}
+
+// Exact names only: no patterns, journalctl options, paths, or user-unit
+// selectors. This intentionally accepts a conservative subset of systemd
+// names; escaped unit names can be added when a real source needs them.
+var journalUnitName = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.@:-]*\.(service|socket|timer|target|mount|automount|path|slice|scope|swap|device)$`)
+
+// JournalPriority follows syslog numbering: smaller means more severe.
+// Configuration and the source use the same mapping to avoid a filter that
+// silently interprets "warning" differently at the two boundaries.
+func JournalPriority(name string) (int, bool) {
+	for i, p := range []string{"emerg", "alert", "crit", "err", "warning", "notice", "info", "debug"} {
+		if p == name {
+			return i, true
+		}
+	}
+	return 0, false
 }
 
 // Agent is a delegation target. v0.1 ships only the generic HTTP adapter,
@@ -215,11 +236,33 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("config: source %q: duplicate name", s.Name)
 		}
 		seenSources[s.Name] = true
-		if s.Type != "http-poller" {
-			return fmt.Errorf("config: source %q: type %q not supported (v0.1: http-poller)", s.Name, s.Type)
-		}
-		if s.URL == "" {
-			return fmt.Errorf("config: source %q: url is required", s.Name)
+		switch s.Type {
+		case "http-poller":
+			if s.URL == "" {
+				return fmt.Errorf("config: source %q: url is required", s.Name)
+			}
+			if len(s.Units) != 0 || s.Priority != "" {
+				return fmt.Errorf("config: source %q: units and priority require systemd-journal", s.Name)
+			}
+		case "systemd-journal":
+			if s.URL != "" || s.BearerTokenEnv != "" || s.ItemPath != "" || s.CursorField != "" || s.SubjectField != "" || s.TimestampField != "" {
+				return fmt.Errorf("config: source %q: HTTP fields are not supported for systemd-journal", s.Name)
+			}
+			if len(s.Units) == 0 || len(s.Units) > 32 {
+				return fmt.Errorf("config: source %q: units must contain 1 to 32 exact system unit names", s.Name)
+			}
+			seen := map[string]bool{}
+			for _, unit := range s.Units {
+				if len(unit) > 255 || !journalUnitName.MatchString(unit) || strings.Contains(unit, "..") || seen[unit] {
+					return fmt.Errorf("config: source %q: invalid or duplicate system unit name", s.Name)
+				}
+				seen[unit] = true
+			}
+			if _, ok := JournalPriority(s.Priority); !ok {
+				return fmt.Errorf("config: source %q: priority must be emerg, alert, crit, err, warning, notice, info, or debug", s.Name)
+			}
+		default:
+			return fmt.Errorf("config: source %q: type %q not supported (http-poller, systemd-journal)", s.Name, s.Type)
 		}
 		// The floor protects the polled target from a typo like `every: 1ms`
 		// turning into a self-inflicted denial of service.

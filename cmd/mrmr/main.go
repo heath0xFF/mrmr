@@ -16,6 +16,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -121,25 +122,36 @@ func run(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// One goroutine per source, owned by the WaitGroup, stopped by ctx.
+	// Prepare every source before starting any: an inaccessible journal or
+	// missing token must not leave earlier sources ingesting on failed boot.
+	runners, err := prepareSources(ctx, cfg.Sources, db)
+	if err != nil {
+		return err
+	}
+	listener, err := net.Listen("tcp", cfg.Server.Addr)
+	if err != nil {
+		return fmt.Errorf("listen: %w", err)
+	}
+	defer listener.Close()
+	defer srv.Close()
+
+	// Every exit path cancels and joins sources before closing SQLite,
+	// including a server failure. Each adapter bounds its own I/O lifetime.
 	var sources sync.WaitGroup
-	for _, sc := range cfg.Sources {
-		if sc.Type != "http-poller" {
-			return fmt.Errorf("source %q: unknown type %q", sc.Name, sc.Type) // config validation should prevent this
-		}
-		p, err := source.NewHTTPPoller(sc)
-		if err != nil {
-			return err
-		}
+	defer func() {
+		stop()
+		sources.Wait()
+	}()
+	for _, runSource := range runners {
 		sources.Add(1)
 		go func() {
 			defer sources.Done()
-			p.Run(ctx, rt)
+			runSource(ctx, rt)
 		}()
 	}
 
 	errCh := make(chan error, 1)
-	go func() { errCh <- srv.ListenAndServe() }()
+	go func() { errCh <- srv.Serve(listener) }()
 
 	log.Printf("mrmr listening on %s (db: %s, model: %s, sources: %d)", cfg.Server.Addr, cfg.DB.Path, cfg.Interpret.Model, len(cfg.Sources))
 
@@ -156,17 +168,33 @@ func run(args []string) error {
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		return fmt.Errorf("shutdown: %w", err)
 	}
-	// Pollers finish their current poll (Ingest is synchronous) or stop at
-	// the next ctx check; a wedged fetch is bounded by the client timeout,
-	// so waiting briefly is enough — a leak here would defeat shutdown.
-	waitSources := make(chan struct{})
-	go func() { sources.Wait(); close(waitSources) }()
-	select {
-	case <-waitSources:
-	case <-shutdownCtx.Done():
-		return fmt.Errorf("shutdown: pollers did not stop in time")
-	}
 	return nil
+}
+
+// Method values keep the two real source adapters explicit without a plugin
+// registry. Construction can check local prerequisites but never starts a
+// polling goroutine; ownership transfers to run only after every check passes.
+func prepareSources(ctx context.Context, configs []config.Source, db *storage.DB) ([]func(context.Context, *runtime.Runtime), error) {
+	var runners []func(context.Context, *runtime.Runtime)
+	for _, sc := range configs {
+		switch sc.Type {
+		case "http-poller":
+			p, err := source.NewHTTPPoller(sc)
+			if err != nil {
+				return nil, err
+			}
+			runners = append(runners, p.Run)
+		case "systemd-journal":
+			j, err := source.NewJournal(ctx, sc, db)
+			if err != nil {
+				return nil, err
+			}
+			runners = append(runners, j.Run)
+		default:
+			return nil, fmt.Errorf("source %q: unknown type %q", sc.Name, sc.Type)
+		}
+	}
+	return runners, nil
 }
 
 // eventsRequest is the wire shape for POST /api/events. Only type and source
