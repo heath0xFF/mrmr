@@ -1,0 +1,34 @@
+{
+  "cli_version": "0.10.5",
+  "checkpoint_id": "01M24G6TY3WRA4E7FCKMM90Y11",
+  "strategy": "manual-commit",
+  "branch": "main",
+  "checkpoints_count": 8,
+  "files_touched": [
+    "IMPLEMENTATION.md",
+    "cmd/mrmr/main.go",
+    "cmd/mrmr/main_test.go",
+    "internal/config/config.go",
+    "internal/config/config_test.go",
+    "internal/source/journal.go",
+    "internal/source/journal_test.go",
+    "internal/source/poller.go",
+    "recipes/homelab-journal/mrmr.example.yaml"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 181820,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 5034880,
+    "output_tokens": 45560,
+    "api_call_count": 60
+  }
+}
