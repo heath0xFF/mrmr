@@ -30,11 +30,10 @@ import (
 )
 
 // HTTPPoller polls a JSON endpoint on an interval and ingests each record
-// as an Event. Cursor semantics are lazy on purpose: every item is offered
-// to InsertEvent on every poll and dedup drops what was seen, so correctness
-// never depends on ordering assumptions. The persisted cursor exists for
-// cursor-based APIs (URL substitution) and as a restart watermark, not as
-// the dedup mechanism.
+// as an Event. Every fetched item is offered to Ingest and dedup drops what
+// was already persisted. The cursor controls which records incremental APIs
+// return next, so an incomplete batch must retain its old watermark: dedup
+// can suppress repeats, but cannot recover a record the API no longer sends.
 type HTTPPoller struct {
 	cfg    config.Source
 	urlTpl *template.Template
@@ -96,6 +95,7 @@ func (p *HTTPPoller) poll(ctx context.Context, rt *runtime.Runtime) {
 	}
 
 	var ingested, dups, cursorAdvanced int
+	complete := true
 	newCursor := ""
 	for i, item := range items {
 		if ctx.Err() != nil {
@@ -103,23 +103,25 @@ func (p *HTTPPoller) poll(ctx context.Context, rt *runtime.Runtime) {
 		}
 		obj, ok := item.(map[string]any)
 		if !ok {
+			complete = false
 			log.Printf("mrmr: poll %s: item %d is not an object, skipped", p.cfg.Name, i)
 			continue
 		}
-		if c := cursorValue(obj, p.cfg.CursorField); c != "" {
-			if c > newCursor { // ponytail: string max; numeric ordering only matters for {{.cursor}} substitution
-				newCursor = c
-			}
-		}
 		e, err := p.normalize(obj)
 		if err != nil {
+			complete = false
 			log.Printf("mrmr: poll %s: item %d: %v", p.cfg.Name, i, err)
 			continue
 		}
 		resp, err := rt.Ingest(ctx, e)
 		if err != nil {
+			complete = false
 			log.Printf("mrmr: poll %s: ingest %s failed: %v", p.cfg.Name, e.ID, err)
 			continue
+		}
+		if c := cursorValue(obj, p.cfg.CursorField); c > newCursor {
+			// ponytail: string max; cursor-based APIs must use lexically ordered IDs.
+			newCursor = c
 		}
 		if resp.Duplicate {
 			dups++
@@ -128,9 +130,14 @@ func (p *HTTPPoller) poll(ctx context.Context, rt *runtime.Runtime) {
 		}
 	}
 
-	// Advance the watermark only after the batch is offered: a crash
-	// mid-poll re-polls the same window, and dedup makes that harmless.
-	if newCursor != "" && newCursor != p.cursor(rt.DB) {
+	// There is no safe partial watermark for an unordered batch: even a
+	// successful record can sort past a failed one. Keep ingesting valid
+	// records, but retry the old window if any item failed or was malformed.
+	// A permanently malformed item therefore holds the cursor until the
+	// source is corrected. Check cancellation here too: the last Ingest can
+	// record a canceled model call as ignore without returning an error.
+	// This protects fetching, not recovery of already-persisted partial work.
+	if complete && ctx.Err() == nil && newCursor != "" && newCursor != p.cursor(rt.DB) {
 		if err := rt.DB.SetCursor(p.cfg.Name, newCursor); err != nil {
 			log.Printf("mrmr: poll %s: persist cursor failed: %v", p.cfg.Name, err)
 		} else {

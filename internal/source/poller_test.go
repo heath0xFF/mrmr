@@ -268,6 +268,97 @@ func TestPollerFetchFailureKeepsState(t *testing.T) {
 	}
 }
 
+// TestPollerIncompleteBatchKeepsCursor exercises failures between two valid
+// records. Advancing to either successful record could hide the failed one
+// from an incremental API, so the whole batch must retain its old watermark.
+func TestPollerIncompleteBatchKeepsCursor(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		item string
+	}{
+		{"event write failure", `{"id":"c"}`},
+		{"non-object", `null`},
+		{"missing id", `{"title":"missing id"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			modelURL, modelCalls := modelMock(t)
+			feedURL, gotQuery := feedServer(t,
+				`{"items":[{"id":"b"},`+tc.item+`,{"id":"d"}]}`,
+				`{"items":[{"id":"b"},{"id":"c"},{"id":"d"}]}`)
+			rt := testRuntime(t, modelURL)
+			if err := rt.DB.SetCursor("feed", "a"); err != nil {
+				t.Fatal(err)
+			}
+			if tc.name == "event write failure" {
+				// A SQLite trigger fails just the middle insert without a mock
+				// storage layer or making the cursor table unwritable too.
+				if _, err := rt.DB.Exec(`CREATE TRIGGER fail_event BEFORE INSERT ON events
+					WHEN NEW.dedup_key = 'c' BEGIN SELECT RAISE(FAIL, 'test failure'); END`); err != nil {
+					t.Fatal(err)
+				}
+			}
+			p, err := NewHTTPPoller(pollerCfg(feedURL + "?after={{ .cursor }}"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			p.poll(context.Background(), rt)
+			if c, err := rt.DB.Cursor("feed"); err != nil || c != "a" {
+				t.Errorf("cursor after incomplete batch = %q, %v, want a", c, err)
+			}
+			if got := countEvents(t, rt); got != 2 {
+				t.Errorf("events = %d, want both valid records stored", got)
+			}
+			if modelCalls.Load() != 2 {
+				t.Errorf("model calls = %d, want 2", modelCalls.Load())
+			}
+
+			// The next page corrects malformed data; removing the trigger
+			// simulates recovery from a transient event persistence failure.
+			if _, err := rt.DB.Exec(`DROP TRIGGER IF EXISTS fail_event`); err != nil {
+				t.Fatal(err)
+			}
+			p.poll(context.Background(), rt)
+			if q := gotQuery.Load().(string); q != "after=a" {
+				t.Errorf("retry query = %q, want original after=a", q)
+			}
+			if c, err := rt.DB.Cursor("feed"); err != nil || c != "d" {
+				t.Errorf("cursor after recovery = %q, %v, want d", c, err)
+			}
+			if got := countEvents(t, rt); got != 3 {
+				t.Errorf("events after recovery = %d, want 3", got)
+			}
+			if modelCalls.Load() != 3 {
+				t.Errorf("model calls after recovery = %d, want 3 (successful records dedup)", modelCalls.Load())
+			}
+		})
+	}
+}
+
+// TestPollerCanceledLastItemKeepsCursor covers cancellation inside Ingest:
+// there is no next loop iteration to notice it, and a canceled model call
+// is recorded as an errored decision rather than returned as an ingest error.
+func TestPollerCanceledLastItemKeepsCursor(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	modelServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cancel()
+	}))
+	defer modelServer.Close()
+	feedURL, _ := feedServer(t, `{"items":[{"id":"b"}]}`)
+	rt := testRuntime(t, modelServer.URL)
+	if err := rt.DB.SetCursor("feed", "a"); err != nil {
+		t.Fatal(err)
+	}
+	p, err := NewHTTPPoller(pollerCfg(feedURL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.poll(ctx, rt)
+	if c, err := rt.DB.Cursor("feed"); err != nil || c != "a" {
+		t.Errorf("cursor after cancellation = %q, %v, want a", c, err)
+	}
+}
+
 // TestCursorSurvivesReopen pins the restart-safety story: the watermark
 // lives in SQLite, so a restarted runtime resumes where it left off.
 func TestCursorSurvivesReopen(t *testing.T) {
