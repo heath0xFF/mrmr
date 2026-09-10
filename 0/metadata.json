@@ -1,0 +1,134 @@
+{
+  "cli_version": "0.10.5",
+  "checkpoint_id": "01M24G6JDP7KT5YYZZ4G1HK6CK",
+  "session_id": "01a088d5-525f-707f-898f-f65bacb9d97c",
+  "strategy": "manual-commit",
+  "created_at": "2026-09-10T01:51:29.539457Z",
+  "branch": "main",
+  "checkpoints_count": 8,
+  "save_step_count": 7,
+  "files_touched": [
+    "internal/source/poller.go",
+    "internal/source/poller_test.go"
+  ],
+  "agent": "Pi",
+  "model": "gpt-6-astra",
+  "turn_id": "d884c03739b7",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 181117,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 4896640,
+    "output_tokens": 45418,
+    "api_call_count": 59
+  },
+  "session_metrics": {
+    "turn_count": 8
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-09-10T01:51:29.488921Z",
+    "agent_lines": 111,
+    "agent_removed": 13,
+    "human_added": 0,
+    "human_modified": 2,
+    "human_removed": 0,
+    "total_committed": 113,
+    "total_lines_changed": 126,
+    "agent_percentage": 98.4126984126984,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 326,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.json": 90,
+        ".codex/hooks.json": 88,
+        ".firecrawl/search-nvidia-switchyard.json": 1,
+        ".pi/extensions/entire/index.ts": 147
+      }
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 325,
+      "user_lines_removed": 0,
+      "agent_lines_added": 268,
+      "agent_lines_removed": 88,
+      "user_added_per_file": {
+        ".claude/settings.json": 90,
+        ".codex/hooks.json": 88,
+        ".pi/extensions/entire/index.ts": 147
+      }
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 325,
+      "user_lines_removed": 0,
+      "agent_lines_added": 268,
+      "agent_lines_removed": 88,
+      "user_added_per_file": {
+        ".claude/settings.json": 90,
+        ".codex/hooks.json": 88,
+        ".pi/extensions/entire/index.ts": 147
+      }
+    },
+    {
+      "checkpoint_number": 4,
+      "user_lines_added": 325,
+      "user_lines_removed": 0,
+      "agent_lines_added": 459,
+      "agent_lines_removed": 88,
+      "user_added_per_file": {
+        ".claude/settings.json": 90,
+        ".codex/hooks.json": 88,
+        ".pi/extensions/entire/index.ts": 147
+      }
+    },
+    {
+      "checkpoint_number": 5,
+      "user_lines_added": 325,
+      "user_lines_removed": 0,
+      "agent_lines_added": 459,
+      "agent_lines_removed": 88,
+      "user_added_per_file": {
+        ".claude/settings.json": 90,
+        ".codex/hooks.json": 88,
+        ".pi/extensions/entire/index.ts": 147
+      }
+    },
+    {
+      "checkpoint_number": 6,
+      "user_lines_added": 325,
+      "user_lines_removed": 0,
+      "agent_lines_added": 570,
+      "agent_lines_removed": 101,
+      "user_added_per_file": {
+        ".claude/settings.json": 90,
+        ".codex/hooks.json": 88,
+        ".pi/extensions/entire/index.ts": 147
+      }
+    },
+    {
+      "checkpoint_number": 7,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 8,
+      "user_lines_added": 325,
+      "user_lines_removed": 0,
+      "agent_lines_added": 1432,
+      "agent_lines_removed": 135,
+      "user_added_per_file": {
+        ".claude/settings.json": 90,
+        ".codex/hooks.json": 88,
+        ".pi/extensions/entire/index.ts": 147
+      }
+    }
+  ]
+}
