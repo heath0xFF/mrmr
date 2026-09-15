@@ -17,6 +17,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync"
 	"text/template"
 	"time"
 
@@ -39,6 +40,23 @@ type Runtime struct {
 	Schema   model.Schema
 	Policy   policy.Policy
 	Filters  filter.List
+	// OnError is the outcome for a Decision that carries no judgment.
+	// Zero value is ignore, so a config without on_error behaves exactly
+	// as it did before the field existed.
+	OnError policy.Then
+	// OnErrorCooldown suppresses repeat no-judgment outcomes. Zero fires
+	// on every failure.
+	OnErrorCooldown time.Duration
+	// onErrorGate is the only mutable state on Runtime, which is otherwise
+	// immutable after construction. It is guarded because the ingest path
+	// is concurrent: HTTP handlers and every poller goroutine share one
+	// Runtime.
+	onErrorGate struct {
+		mu   sync.Mutex
+		last time.Time
+	}
+	// now is swappable so cooldown tests do not sleep. Nil means time.Now.
+	now func() time.Time
 	// AgentEndpoints maps a policy delegate.agent name to its HTTP endpoint.
 	// Resolved at startup from config so policy rules never carry URLs.
 	AgentEndpoints map[string]string
@@ -191,9 +209,16 @@ func (r *Runtime) ingest(ctx context.Context, e event.Event, t *[]TraceStep) (*R
 		} else {
 			step(t, "policy", fmt.Sprintf("rule %d → %s", ruleIdx+1, then.Outcome()))
 		}
+	} else if r.allowOnError() {
+		// A no-judgment decision does not reach policy, but silence is its
+		// own failure: a dead endpoint fails every event and, before this,
+		// looked identical to "nothing worth alerting". OnError is the
+		// operator's standing instruction for that case.
+		then = r.OnError
+		step(t, "policy", "on_error → "+then.Outcome()+" ("+dec.Status+" decision)")
 	} else {
 		then = policy.Then{Ignore: true}
-		step(t, "policy", "routed to ignore ("+dec.Status+" decision)")
+		step(t, "policy", "routed to ignore ("+dec.Status+" decision, on_error in cooldown)")
 	}
 
 	// Shadow records the outcome as if it had fired but executes nothing —
@@ -225,6 +250,35 @@ func (r *Runtime) ingest(ctx context.Context, e event.Event, t *[]TraceStep) (*R
 	r.recordExecution(e.ID, dec.ID, then.Outcome(), adapterFor(then), status, execErr)
 
 	return &Response{EventID: e.ID, Decision: dec, Outcome: then.Outcome(), Trace: *t}, nil
+}
+
+// allowOnError reports whether the no-judgment outcome may fire now, and
+// claims the cooldown window when it does. Claiming on the allow side keeps
+// the check and the reservation atomic: concurrent failures during one
+// outage produce a single alert rather than one per racing goroutine.
+//
+// An ignore OnError needs no gate — suppressing a no-op to a no-op only
+// costs a lock — so the common (unconfigured) case never touches the mutex.
+//
+// ponytail: one global window, not per error class. If "endpoint down" and
+// "schema drift" ever need separate budgets, key the gate by dec.Status.
+func (r *Runtime) allowOnError() bool {
+	if r.OnError.Ignore || r.OnErrorCooldown <= 0 {
+		return true
+	}
+	nowFn := r.now
+	if nowFn == nil {
+		nowFn = time.Now
+	}
+	now := nowFn()
+
+	r.onErrorGate.mu.Lock()
+	defer r.onErrorGate.mu.Unlock()
+	if !r.onErrorGate.last.IsZero() && now.Sub(r.onErrorGate.last) < r.OnErrorCooldown {
+		return false
+	}
+	r.onErrorGate.last = now
+	return true
 }
 
 // recordExecution persists an execution row, degrading to a log entry on
@@ -361,7 +415,18 @@ func renderMessage(tmpl string, dec *event.Decision) string {
 		return fmt.Sprintf("[%s] (bad notify template: %v)", dec.EventID, err)
 	}
 	var sb strings.Builder
-	if err := t.Execute(&sb, map[string]any{"result": dec.Result, "event": map[string]any{"id": dec.EventID}}); err != nil {
+	// decision is exposed for on_error templates: a failed Decision has a
+	// nil Result, so status and error are the only things left to say.
+	ctx := map[string]any{
+		"result": dec.Result,
+		"event":  map[string]any{"id": dec.EventID},
+		"decision": map[string]any{
+			"status": dec.Status,
+			"error":  dec.Error,
+			"model":  dec.Model,
+		},
+	}
+	if err := t.Execute(&sb, ctx); err != nil {
 		return fmt.Sprintf("[%s] (template error: %v)", dec.EventID, err)
 	}
 	return sb.String()
