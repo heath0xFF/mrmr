@@ -603,3 +603,93 @@ func TestIngestExecutionWriteFailureStillSucceeds(t *testing.T) {
 		t.Errorf("outcome = %q, want notify (the side effect fired)", resp.Outcome)
 	}
 }
+
+// --- on_error: the no-judgment escalation -------------------------------
+//
+// A dead model endpoint fails every event, and before on_error existed that
+// was indistinguishable from "nothing worth alerting". These pin the three
+// properties that matter: an unconfigured runtime still degrades to silence,
+// a configured one escalates, and one outage does not become one alert per
+// event.
+
+func TestIngestModelDownFiresOnError(t *testing.T) {
+	url, _ := modelServer(t, fail500)
+	rt := newTestRuntime(t, url)
+	rt.OnError = policy.Then{Notify: &policy.Notify{Via: "stdout", Message: "no judgment: {{ .decision.status }}"}}
+
+	resp, err := rt.Ingest(context.Background(), testEvent("oe-1"))
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if resp.Decision == nil || resp.Decision.Status != "errored" {
+		t.Fatalf("decision = %+v, want status errored", resp.Decision)
+	}
+	if resp.Outcome != "notify" {
+		t.Errorf("outcome = %q, want notify (on_error must escalate a no-judgment decision)", resp.Outcome)
+	}
+}
+
+func TestIngestModelDownWithoutOnErrorStillIgnores(t *testing.T) {
+	// The pre-on_error contract. A config that never mentions on_error must
+	// behave exactly as it did before the field existed.
+	url, _ := modelServer(t, fail500)
+	rt := newTestRuntime(t, url)
+
+	resp, err := rt.Ingest(context.Background(), testEvent("oe-2"))
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if resp.Outcome != "ignore" {
+		t.Errorf("outcome = %q, want ignore", resp.Outcome)
+	}
+}
+
+func TestOnErrorCooldownSuppressesRepeats(t *testing.T) {
+	// Three failures inside one cooldown window: the first escalates, the
+	// rest fall back to ignore. Time is injected rather than slept so the
+	// test states the window instead of racing it.
+	url, _ := modelServer(t, fail500)
+	rt := newTestRuntime(t, url)
+	rt.OnError = policy.Then{Notify: &policy.Notify{Via: "stdout"}}
+	rt.OnErrorCooldown = time.Hour
+
+	clock := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	rt.now = func() time.Time { return clock }
+
+	var outcomes []string
+	for i, id := range []string{"oe-3", "oe-4", "oe-5"} {
+		clock = clock.Add(time.Duration(i) * time.Minute)
+		resp, err := rt.Ingest(context.Background(), testEvent(id))
+		if err != nil {
+			t.Fatalf("Ingest %s: %v", id, err)
+		}
+		outcomes = append(outcomes, resp.Outcome)
+	}
+	want := []string{"notify", "ignore", "ignore"}
+	for i := range want {
+		if outcomes[i] != want[i] {
+			t.Errorf("outcome[%d] = %q, want %q (outcomes: %v)", i, outcomes[i], want[i], outcomes)
+		}
+	}
+
+	// Past the window the gate reopens: a cooldown must delay alerts, not
+	// silence an outage that is still going.
+	clock = clock.Add(2 * time.Hour)
+	resp, err := rt.Ingest(context.Background(), testEvent("oe-6"))
+	if err != nil {
+		t.Fatalf("Ingest oe-6: %v", err)
+	}
+	if resp.Outcome != "notify" {
+		t.Errorf("outcome after cooldown = %q, want notify", resp.Outcome)
+	}
+}
+
+func TestOnErrorTemplateExposesDecisionError(t *testing.T) {
+	// An on_error message has no .result to render — a failed decision has
+	// none — so status and error must be reachable or the alert says nothing.
+	dec := &event.Decision{EventID: "evt_1", Status: "errored", Error: "dial tcp: refused", Model: "m"}
+	got := renderMessage("{{ .decision.status }}/{{ .decision.error }}", dec)
+	if got != "errored/dial tcp: refused" {
+		t.Errorf("renderMessage = %q, want %q", got, "errored/dial tcp: refused")
+	}
+}

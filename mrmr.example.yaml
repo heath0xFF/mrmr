@@ -114,3 +114,17 @@ default:
   # how a new flow earns trust before going live:
   # default:
   #   shadow: true
+
+# What to do when an event produced no judgment: the model endpoint was
+# down, or its output failed schema validation twice. Such a decision never
+# reaches policy — there is nothing to evaluate — so before this block it
+# was silently ignored, and a dead interpreter looked exactly like a quiet
+# one. Omit on_error to keep that original ignore behavior.
+#
+# cooldown suppresses repeats: an outage fails every event, so without it
+# one incident emits one alert per event for as long as it lasts.
+on_error:
+  cooldown: 15m
+  notify:
+    via: stdout
+    message: "[mrmr] no judgment on {{ .event.id }}: {{ .decision.status }} — {{ .decision.error }}"

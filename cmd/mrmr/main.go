@@ -27,6 +27,7 @@ import (
 	"github.com/heath0xff/mrmr/internal/config"
 	"github.com/heath0xff/mrmr/internal/event"
 	"github.com/heath0xff/mrmr/internal/model"
+	"github.com/heath0xff/mrmr/internal/policy"
 	"github.com/heath0xff/mrmr/internal/runtime"
 	"github.com/heath0xff/mrmr/internal/source"
 	"github.com/heath0xff/mrmr/internal/storage"
@@ -103,6 +104,11 @@ func run(args []string) error {
 		Schema:   cfg.Interpret.Schema,
 		Policy:   cfg.Policy,
 		Filters:  cfg.Filter,
+		// An absent on_error block is the zero Then, which is neither
+		// ignore nor any outcome. Normalize it to ignore so the no-judgment
+		// path keeps its documented behavior when nothing is configured.
+		OnError:         onErrorOutcome(cfg.OnError.Then),
+		OnErrorCooldown: cfg.OnError.Cooldown,
 	}
 	// Resolve delegation endpoints once at startup; policy rules reference
 	// agents by name only.
@@ -270,4 +276,15 @@ func writeError(w http.ResponseWriter, code int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	json.NewEncoder(w).Encode(map[string]string{"error": msg})
+}
+
+// onErrorOutcome normalizes an omitted on_error into an explicit ignore.
+// Then.Outcome() already reports "ignore" for the zero value, but the
+// Ignore field itself stays false, and the runtime's cooldown fast path
+// reads that field to know the outcome is a no-op worth never gating.
+func onErrorOutcome(t policy.Then) policy.Then {
+	if t.Notify == nil && t.Action == nil && t.Delegate == nil {
+		return policy.Then{Ignore: true}
+	}
+	return t
 }

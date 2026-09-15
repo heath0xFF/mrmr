@@ -72,7 +72,7 @@ mrmr is early-stage software with a working vertical slice, HTTP polling, and a 
 | Interpretation | OpenAI-compatible chat completions; structured-output requests; local schema validation and bounded retries |
 | Filtering | Scalar `eq` / `neq` checks on event fields |
 | Policy | ANDed conditions, first-match rules, explicit default |
-| Outcomes | Ignore, stdout notify, HTTP action, emit-event, generic HTTP delegation, shadow |
+| Outcomes | Ignore, stdout notify, HTTP action, emit-event, generic HTTP delegation, shadow, on-error escalation |
 | Review | Event listing, trace inspection, labeling, JSONL export, model evaluation |
 
 **Not implemented:** MCP polling or tool calls, native SaaS integrations, built-in cron, XML RSS parsing, Discord/Telegram adapters, exec actions, permission/approval queues, web UI, multiple independently routed flows, or hot reload.
@@ -195,6 +195,33 @@ Conditions support literal equality and operator strings: `>`, `>=`, `<`, `<=`, 
 | Delegate | `delegate: {agent: triage, prompt: "Investigate this event."}` | POST to `agents.triage.endpoint`; HTTP 2xx means accepted |
 
 Notify messages and HTTP action bodies use Go templates such as `{{ .result.summary }}` and `{{ .event.id }}`. Delegation sends `{event_id, decision, prompt}`; the prompt is configured text, not a rendered template. Agent completion does not automatically return as a new event.
+
+### When there is no judgment
+
+A decision that errored or failed validation never reaches policy, so it
+selects `ignore`. That is the right authority boundary — a broken model must
+not trigger actions — but on its own it is also silent: an endpoint that is
+down fails every event and looks identical to a quiet system.
+
+`on_error` is the operator's standing instruction for that case:
+
+```yaml
+on_error:
+  cooldown: 15m
+  notify:
+    via: stdout
+    message: "[mrmr] no judgment on {{ .event.id }}: {{ .decision.status }} — {{ .decision.error }}"
+```
+
+- Omitting `on_error` keeps the original behavior exactly: no-judgment events ignore.
+- It is not policy. The model cannot select it or influence which branch runs, so escalating here grants a failed interpreter no authority it lacked.
+- It takes the same outcomes and the same validation as a policy rule, including `shadow: true`.
+- `cooldown` suppresses repeats. An outage fails every event; without a window, one incident emits one alert per event for as long as it lasts. Suppressed failures still record an `ignore` execution, so the audit trail stays complete. Zero or omitted fires on every failure.
+- Templates here expose `.decision.status`, `.decision.error`, and `.decision.model`. A failed decision has no `.result` to render.
+
+**`.decision.error` can contain the endpoint's response body.** It is the same
+content that already reaches traces and logs, but a notify message can carry
+it somewhere less protected — see [operational limits](#operational-limits).
 
 **Start with shadow when testing effects.** Add `shadow: true` beside the outcome in each rule you want suppressed:
 

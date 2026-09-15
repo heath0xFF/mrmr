@@ -595,3 +595,61 @@ sources:
 		t.Errorf("source = %+v, want the documented example", s)
 	}
 }
+
+// --- on_error ------------------------------------------------------------
+
+func TestLoadOnErrorOmittedIsNotAnError(t *testing.T) {
+	// The field is additive: every config written before it existed must
+	// still load, and must not silently acquire an outcome.
+	cfg, err := Load(writeConfig(t, minimalYAML))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.OnError.configured() {
+		t.Errorf("on_error = %+v, want unconfigured when omitted", cfg.OnError)
+	}
+}
+
+func TestLoadOnErrorWithCooldown(t *testing.T) {
+	cfg, err := Load(writeConfig(t, minimalYAML+`
+on_error:
+  cooldown: 15m
+  notify:
+    via: stdout
+    message: "no judgment: {{ .decision.error }}"
+`))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.OnError.Cooldown != 15*time.Minute {
+		t.Errorf("cooldown = %v, want 15m", cfg.OnError.Cooldown)
+	}
+	if cfg.OnError.Notify == nil || cfg.OnError.Notify.Via != "stdout" {
+		t.Errorf("on_error.notify = %+v, want stdout", cfg.OnError.Notify)
+	}
+}
+
+func TestValidateOnErrorRejectsBadOutcome(t *testing.T) {
+	// on_error runs real adapters, so it gets the same validation as a
+	// policy rule rather than a laxer path.
+	_, err := Load(writeConfig(t, minimalYAML+`
+on_error:
+  notify:
+    via: sms
+`))
+	if err == nil || !strings.Contains(err.Error(), `on_error: notify.via "sms" not supported`) {
+		t.Errorf("Load() error = %v, want on_error notify.via rejection", err)
+	}
+}
+
+func TestValidateOnErrorRejectsNegativeCooldown(t *testing.T) {
+	_, err := Load(writeConfig(t, minimalYAML+`
+on_error:
+  cooldown: -5m
+  notify:
+    via: stdout
+`))
+	if err == nil || !strings.Contains(err.Error(), "cooldown must not be negative") {
+		t.Errorf("Load() error = %v, want negative cooldown rejection", err)
+	}
+}

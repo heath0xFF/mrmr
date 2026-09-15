@@ -98,6 +98,32 @@ type Config struct {
 	// Sources are pull-based ingesters; each runs its own goroutine and
 	// feeds the same pipeline as POST /api/events.
 	Sources []Source `yaml:"sources"`
+	// OnError is the outcome for events that produced no judgment because
+	// interpretation errored or returned an invalid result. It is separate
+	// from Policy on purpose: policy evaluates a Decision's result, and a
+	// failed decision has none to evaluate. Absent means ignore, which is
+	// the behavior that predates this field.
+	OnError OnError `yaml:"on_error"`
+}
+
+// OnError is the no-judgment escalation: a fixed outcome plus a cooldown.
+// It is an operator's standing instruction, not a model-selected branch —
+// a failed model cannot influence which outcome runs here, so escalating
+// does not hand a broken interpreter any authority it lacked.
+type OnError struct {
+	policy.Then `yaml:",inline"`
+	// Cooldown suppresses repeat alerts. A dead model endpoint fails every
+	// event, so one outage would otherwise emit one alert per event for as
+	// long as it lasts. Zero means every failure fires.
+	Cooldown time.Duration `yaml:"cooldown"`
+}
+
+// configured reports whether an on_error block was actually written. The
+// zero value is indistinguishable from "absent" in YAML, and absent must
+// keep meaning ignore rather than becoming a validation error.
+func (o OnError) configured() bool {
+	return o.Notify != nil || o.Action != nil || o.Delegate != nil ||
+		o.Ignore || o.Shadow || o.Cooldown != 0
 }
 
 // Load reads, parses, and validates the config at path. Defaults (addr,
@@ -280,6 +306,18 @@ func (c *Config) Validate() error {
 		if err := validateThen(r.Then, fmt.Sprintf("policy rule %d", i+1)); err != nil {
 			return err
 		}
+	}
+	// on_error is optional, and an omitted block is the zero Then, which
+	// validateThen rejects for naming no outcome. Only validate a block the
+	// operator actually wrote, or every config predating this field fails
+	// to start.
+	if c.OnError.configured() {
+		if err := validateThen(c.OnError.Then, "on_error"); err != nil {
+			return err
+		}
+	}
+	if c.OnError.Cooldown < 0 {
+		return fmt.Errorf("config: on_error.cooldown must not be negative")
 	}
 	return validateThen(c.Policy.Default, "default")
 }
