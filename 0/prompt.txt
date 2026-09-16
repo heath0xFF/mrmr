@@ -1,9 +1,1 @@
-spin up some luna agents and do a bug review
-
----
-
-ok well let's fix them.
-
----
-
-explain to me the issues and what the fix was
+ok commit and push
