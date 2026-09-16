@@ -1,0 +1,94 @@
+{
+  "cli_version": "0.10.5",
+  "checkpoint_id": "01M2KT354MF1RPQ23YJY2ZEE09",
+  "session_id": "01a0a714-8bc8-7379-8bfd-818addf4b714",
+  "strategy": "manual-commit",
+  "created_at": "2026-09-16T00:32:59.922Z",
+  "branch": "main",
+  "checkpoints_count": 3,
+  "save_step_count": 2,
+  "files_touched": [
+    "README.md",
+    "cmd/mrmr/eval.go",
+    "cmd/mrmr/eval_test.go",
+    "cmd/mrmr/main.go",
+    "cmd/mrmr/main_test.go",
+    "internal/event/event.go",
+    "internal/filter/filter.go",
+    "internal/filter/filter_test.go",
+    "internal/model/model.go",
+    "internal/model/model_test.go",
+    "internal/runtime/runtime.go",
+    "internal/runtime/runtime_test.go",
+    "internal/source/poller.go",
+    "internal/source/poller_test.go",
+    "internal/storage/labels.go",
+    "internal/storage/storage.go",
+    "internal/storage/storage_test.go"
+  ],
+  "agent": "Pi",
+  "model": "gpt-6-astra",
+  "turn_id": "fa04d30389d6",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 176902,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 5254528,
+    "output_tokens": 26317,
+    "api_call_count": 61
+  },
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-09-16T00:32:59.877692Z",
+    "agent_lines": 443,
+    "agent_removed": 91,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 443,
+    "total_lines_changed": 534,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 326,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.json": 90,
+        ".codex/hooks.json": 88,
+        ".firecrawl/search-nvidia-switchyard.json": 1,
+        ".pi/extensions/entire/index.ts": 147
+      }
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 325,
+      "user_lines_removed": 0,
+      "agent_lines_added": 444,
+      "agent_lines_removed": 91,
+      "user_added_per_file": {
+        ".claude/settings.json": 90,
+        ".codex/hooks.json": 88,
+        ".pi/extensions/entire/index.ts": 147
+      }
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 325,
+      "user_lines_removed": 0,
+      "agent_lines_added": 444,
+      "agent_lines_removed": 91,
+      "user_added_per_file": {
+        ".claude/settings.json": 90,
+        ".codex/hooks.json": 88,
+        ".pi/extensions/entire/index.ts": 147
+      }
+    }
+  ]
+}
