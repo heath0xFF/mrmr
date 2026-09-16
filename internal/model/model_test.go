@@ -184,6 +184,59 @@ func TestInterpretResponseFormatFallback(t *testing.T) {
 	}
 }
 
+// The budget counts wire requests, not calls to a helper that can retry.
+// Mixed failures also prove that format fallback stays disabled and does
+// not steal the one allowed schema correction from the remaining budget.
+func TestInterpretSharedHTTPBudget(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		steps   []int // 0 = schema-invalid content; 200 = valid content
+		wantErr bool
+	}{
+		{"fallback then outage", []int{400, 500, 500}, true},
+		{"fallback then correction", []int{400, 0, 200}, false},
+		{"fallback then invalid twice", []int{400, 0, 0}, true},
+		{"outage then fallback", []int{500, 400, 200}, false},
+		{"second 400 stops", []int{400, 400}, true},
+		{"fallback at budget end", []int{500, 500, 400}, true},
+		{"outage during correction", []int{0, 500, 200}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls, rejectedFormat := 0, false
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var req chatRequest
+				if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+					t.Error(err)
+				}
+				if rejectedFormat && req.ResponseFormat != nil {
+					t.Error("rejected response_format was sent again")
+				}
+				calls++
+				if calls > len(tc.steps) {
+					t.Error("unexpected extra HTTP request")
+					w.WriteHeader(500)
+					return
+				}
+				code := tc.steps[calls-1]
+				switch code {
+				case 0:
+					json.NewEncoder(w).Encode(chatBody(`{"category":"invalid","importance":0.9}`))
+				case 200:
+					json.NewEncoder(w).Encode(chatBody(`{"category":"important","importance":0.9}`))
+				default:
+					rejectedFormat = rejectedFormat || (code == 400 && req.ResponseFormat != nil)
+					w.WriteHeader(code)
+				}
+			}))
+			defer srv.Close()
+			_, _, _, err := (&Client{}).Interpret(context.Background(), testConfig(srv.URL), "mock", "classify", testSchema(), []byte(`{}`))
+			if (err != nil) != tc.wantErr || calls != len(tc.steps) || calls > maxAttempts {
+				t.Fatalf("calls=%d err=%v, want %d calls, error=%v", calls, err, len(tc.steps), tc.wantErr)
+			}
+		})
+	}
+}
+
 func TestInterpretTransportFailureAfterRetries(t *testing.T) {
 	// A hard-down endpoint must surface a transport error (not
 	// InvalidOutputError) after the bounded attempt count, with no

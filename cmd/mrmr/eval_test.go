@@ -2,8 +2,15 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/heath0xff/mrmr/internal/config"
 	"github.com/heath0xff/mrmr/internal/event"
@@ -18,6 +25,57 @@ func TestGeneratedEvalDataset(t *testing.T) {
 	}
 	if len(cases) != 50 {
 		t.Fatalf("dataset has %d cases, want 50", len(cases))
+	}
+}
+
+// Real-event evaluation must grade the recorded evidence, including numeric
+// identities and source time. Stable fixture defaults only fill missing fields.
+func TestEvaluatePreservesRecordedEvent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "real.jsonl")
+	if err := os.WriteFile(path, []byte(`{"name":"real","event":{"id":"evt_real","type":"test","source":"test","timestamp":"2026-09-15T12:00:00-05:00","data":{"id":9007199254740993}},"expected":{"category":"noise","requires_action":false,"outcome":"ignore"}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cases, err := loadEvalCases(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var observed event.Event
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Messages []struct{ Role, Content string }
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Error(err)
+		}
+		for _, msg := range req.Messages {
+			if msg.Role == "user" {
+				// Keep the mock from hiding the very rounding under test.
+				dec := json.NewDecoder(strings.NewReader(msg.Content))
+				dec.UseNumber()
+				if err := dec.Decode(&observed); err != nil {
+					t.Error(err)
+				}
+			}
+		}
+		io.WriteString(w, `{"choices":[{"message":{"content":"{\"category\":\"noise\",\"requires_action\":false}"}}]}`)
+	}))
+	defer srv.Close()
+	cfg := &config.Config{
+		Models: map[string]model.Config{"mock": {BaseURL: srv.URL, Model: "mock"}},
+		Interpret: config.Interpret{Model: "mock", Schema: model.Schema{
+			"category": {Type: "string"}, "requires_action": {Type: "boolean"},
+		}},
+		Policy: policy.Policy{Default: policy.Then{Ignore: true}},
+	}
+	evaluate(context.Background(), cfg, cases, io.Discard)
+	if observed.ID != "evt_real" || observed.Timestamp.Format(time.RFC3339) != "2026-09-15T12:00:00-05:00" || observed.Data["id"] != json.Number("9007199254740993") {
+		t.Fatalf("evaluation rewrote recorded evidence: %+v", observed)
+	}
+	cases[0].Event.ID = ""
+	cases[0].Event.Timestamp = time.Time{}
+	evaluate(context.Background(), cfg, cases, io.Discard)
+	if observed.ID != "eval_001" || observed.Timestamp.Format(time.RFC3339) != "2026-01-01T12:00:00Z" {
+		t.Fatalf("missing fixture defaults: %+v", observed)
 	}
 }
 

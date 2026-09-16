@@ -5,6 +5,7 @@
 package filter
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"strings"
@@ -34,6 +35,10 @@ func TestEvaluatePassAndFail(t *testing.T) {
 		{"neq excludes an equal value", List{{Field: "data.author", Op: OpNeq, Value: "dependabot[bot]"}}, evt(map[string]any{"author": "dependabot[bot]"}, nil), false},
 		{"empty op defaults to eq", List{{Field: "data.author", Value: "alice"}}, evt(map[string]any{"author": "alice"}, nil), true},
 		{"eq excludes a different value", List{{Field: "data.author", Op: OpEq, Value: "alice"}}, evt(map[string]any{"author": "bob"}, nil), false},
+		{"exact JSON number matches YAML integer", List{{Field: "data.count", Value: 5}}, evt(map[string]any{"count": json.Number("5.0")}, nil), true},
+		{"large integer matches exactly", List{{Field: "data.count", Value: int64(9007199254740993)}}, evt(map[string]any{"count": json.Number("9007199254740993")}, nil), true},
+		{"adjacent large integers differ", List{{Field: "data.count", Value: int64(9007199254740992)}}, evt(map[string]any{"count": json.Number("9007199254740993")}, nil), false},
+		{"numeric string stays a string", List{{Field: "data.count", Op: OpNeq, Value: "5"}}, evt(map[string]any{"count": json.Number("5")}, nil), false},
 		{"numbers normalize int vs float", List{{Field: "data.count", Value: 5}}, evt(map[string]any{"count": 5.0}, nil), true},
 		{"numbers compare across representations", List{{Field: "data.count", Op: OpNeq, Value: 5.0}}, evt(map[string]any{"count": 4}, nil), true},
 		{"bools compare as bools", List{{Field: "data.flag", Value: true}}, evt(map[string]any{"flag": true}, nil), true},
@@ -229,7 +234,7 @@ func TestSpecValidateRejectsNonFiniteFloat32(t *testing.T) {
 // operators. Without the guard, neq passes every non-finite value and
 // malformed data slips past the gate.
 func TestEvaluateNonFiniteEventValueFails(t *testing.T) {
-	for _, v := range []any{math.NaN(), math.Inf(1)} {
+	for _, v := range []any{math.NaN(), math.Inf(1), json.Number("NaN"), json.Number("1e999999999"), json.Number("1e-999999999")} {
 		for _, op := range []Op{OpEq, OpNeq} {
 			t.Run(fmt.Sprintf("%v-%s", v, op), func(t *testing.T) {
 				specs := List{{Field: "data.score", Op: op, Value: 0.5}}

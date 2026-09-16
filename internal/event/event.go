@@ -11,6 +11,7 @@ package event
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"time"
 )
@@ -64,6 +65,25 @@ type TraceStep struct {
 	At    time.Time `json:"at"`
 	Stage string    `json:"stage"`
 	Msg   string    `json:"msg,omitempty"`
+}
+
+// SourceEventID accepts only non-empty strings and JSON numbers as stable
+// source identities. Null and compound values are not IDs: formatting them
+// with fmt.Sprint would make unrelated events share keys such as "<nil>".
+// An empty result lets storage fall back to the payload hash; a source that
+// requires a cursor must instead skip the record and retain its checkpoint.
+func SourceEventID(v any) string {
+	switch n := v.(type) {
+	case string:
+		return n
+	case json.Number, int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, float32, float64:
+		// Marshal validates json.Number and rejects NaN/Inf for internal
+		// callers without rounding exact JSON or integer values to floats.
+		if b, err := json.Marshal(n); err == nil {
+			return string(b)
+		}
+	}
+	return ""
 }
 
 // NewID returns a sortable unique id: prefix + hex(unix-millis + random).

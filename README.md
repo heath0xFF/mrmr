@@ -164,7 +164,7 @@ All checks must pass. `eq` is the default operator. Fields can address `type`, `
 
 `interpret` selects a model, a prompt, and a flat result schema. The supported field types are `string`, `number`, and `boolean`, with optional enums and numeric bounds. Every declared field is required, and extra result fields are rejected.
 
-The client requests schema-constrained decoding. If the endpoint rejects that request with HTTP 400, it retries without the response format; runtime validation still applies. Invalid output gets at most one self-correction retry, and endpoint retries are bounded.
+The client requests schema-constrained decoding. If the endpoint rejects that request with HTTP 400, it retries without the response format; runtime validation still applies. Invalid output gets at most one self-correction retry. Format fallback, self-correction, and endpoint retries share a maximum of three completion attempts. Endpoint HTTP errors retain the status code, not the response body, so reflected credentials or private prompts cannot enter traces through error pages.
 
 ### Policy and outcomes
 
@@ -194,7 +194,7 @@ Conditions support literal equality and operator strings: `>`, `>=`, `<`, `<=`, 
 | Emit event | `action: {type: emit, event_type: incident.escalated}` | Re-enter the same pipeline with the decision result as event data |
 | Delegate | `delegate: {agent: triage, prompt: "Investigate this event."}` | POST to `agents.triage.endpoint`; HTTP 2xx means accepted |
 
-Notify messages and HTTP action bodies use Go templates such as `{{ .result.summary }}` and `{{ .event.id }}`. Delegation sends `{event_id, decision, prompt}`; the prompt is configured text, not a rendered template. Agent completion does not automatically return as a new event.
+Notify messages and HTTP action bodies use Go templates such as `{{ .result.summary }}` and `{{ .event.id }}`. An omitted HTTP action body sends the decision result as a JSON object, without the event-ID prefix used by stdout notifications. Delegation sends `{event_id, decision, prompt}`; the prompt is configured text, not a rendered template. Agent completion does not automatically return as a new event.
 
 **Start with shadow when testing effects.** Add `shadow: true` beside the outcome in each rule you want suppressed:
 
@@ -224,7 +224,9 @@ This records the selected notification without printing it. Shadow does not skip
 
 The API assigns event IDs and timestamps. Request bodies are limited to 1 MiB. Model or adapter failures are reported through the decision/trace, not necessarily a failing HTTP status; inspect the response rather than treating HTTP 200 as proof an effect succeeded.
 
-Deduplication uses `(source, metadata.source_event_id)`. Without an explicit ID, it hashes the event type, subject, and data. Give genuinely separate occurrences distinct IDs, even if their payloads are identical.
+Deduplication uses `(source, metadata.source_event_id)`. IDs must be non-empty strings or JSON numbers; missing, null, empty, boolean, or compound IDs fall back to hashing the event type, subject, and data. Numeric payloads and IDs retain their JSON spelling without float64 rounding, including during inspection and dataset export. Prefer stable string IDs; when using numbers, keep their spelling consistent between deliveries. Give genuinely separate occurrences distinct IDs, even if their payloads are identical.
+
+**Upgrade note:** earlier versions rounded JSON numbers and formatted numeric dedup keys through float64. Exact-number ingestion can therefore assign a different key to a replayed numeric-ID or payload-hashed event. Existing rows/cursors are not rewritten, and previously rounded or dropped data cannot be reconstructed automatically. Use shadow outcomes when checking overlapping feeds after an upgrade; do not assume old numeric dedup keys prevent repeated effects.
 
 This endpoint accepts **normalized events**, not arbitrary provider webhook formats. A script or integration must translate provider payloads and handle any required webhook authentication before submitting them.
 
@@ -250,7 +252,7 @@ sources:
 - Performs an HTTP GET with a 15-second timeout and a 4 MiB response read limit. A failed fetch leaves the cursor unchanged; the next tick retries.
 - Reads a JSON array at `item_path` (a dot-path); omit it for a top-level array. This is not an XML RSS/Atom parser.
 - Preserves each record as `event.data`; the source name becomes `event.source`. Subject and timestamp fields refer to top-level record fields. Timestamps use RFC3339; missing or invalid timestamps fall back to now.
-- Uses `cursor_field` as the dedup ID and stores a watermark in SQLite. Without it, payload-hash deduplication applies. Missing configured IDs are skipped; changes to a record with the same ID do not create a new event.
+- Uses `cursor_field` as the dedup ID and stores a watermark in SQLite. Without it, payload-hash deduplication applies. Missing, empty, null, boolean, or compound configured IDs are skipped and hold the watermark; changes to a record with the same ID do not create a new event.
 - Resolves an optional bearer token from the named environment variable at startup.
 
 For compatible APIs, the URL may use `?after={{ .cursor }}`. **This is a basic watermark, not general pagination:** it is the string maximum of the fetched record IDs, not an opaque server continuation token. Substitution is literal, without URL escaping. The watermark changes only after every record is normalized and accepted by ingestion without cancellation; failed or malformed records hold the old cursor for the next poll, while successful records deduplicate on replay. A permanently malformed record holds the cursor until the source is corrected. This does not recover already-persisted, half-processed events after a crash or downstream persistence failure. Prefer overlapping recent-record feeds for initial dogfooding; do not rely on this for lossless incremental synchronization.
@@ -315,7 +317,7 @@ For prompt development before real data is available:
 ./mrmr eval -config mrmr.yaml -dataset testdata/generated-eval.jsonl
 ```
 
-Evaluation calls the interpreter and evaluates policy without executing effects or writing runtime events. It does not run pre-model filters. It reports category, requires-action, and outcome accuracy plus the false-ignore rate. Use the generated set as a baseline, then grade at least 50 representative real events against your own acceptance thresholds before trusting a flow.
+Evaluation calls the interpreter and evaluates policy without executing effects or writing runtime events. Recorded event IDs, timestamps, and numeric payloads are preserved; deterministic defaults fill only missing IDs/timestamps in generated fixtures. It does not run pre-model filters. It reports category, requires-action, and outcome accuracy plus the false-ignore rate. Use the generated set as a baseline, then grade at least 50 representative real events against your own acceptance thresholds before trusting a flow.
 
 Exports contain complete event payloads. Real evaluation datasets are ignored by Git by default, but inspect and anonymize them before sharing.
 
@@ -327,7 +329,7 @@ Exports contain complete event payloads. Real evaluation datasets are ignored by
 - **No permission or approval layer yet.** Configured policy is the current authority boundary. There is no approval queue, automatic stale-event action downgrade, or action sandbox.
 - **Persistence is not crash recovery.** There is no queue replay for half-processed events. Effects run before execution records are written; a crash can leave incomplete processing or an audit gap. Deduplication is not an exactly-once execution guarantee.
 - **Polling is deliberately basic.** No general pagination, arbitrary cursor ordering, or durable ingestion retry queue. Slow interpretation delays the next record in that source.
-- **Stored data can be sensitive.** Events, structured decisions, and traces persist in SQLite; API processing also prints response traces. Full prompts and successful raw model responses are not stored as separate artifacts, but endpoint error bodies can appear in errors/traces. Protect the database, logs, and exports.
+- **Stored data can be sensitive.** Events, structured decisions, and traces persist in SQLite; API processing also prints response traces. Full prompts and successful raw model responses are not stored as separate artifacts. Endpoint HTTP error bodies are discarded; HTTP error traces contain status codes only. This does not remove sensitive material already stored or logged by older versions. Protect the database, logs, and exports.
 - **Secrets belong outside config.** Use `api_key_env` for model authentication and `bearer_token_env` for pollers. Do not put credentials in URLs, event payloads, or prompts.
 
 ## Deployment

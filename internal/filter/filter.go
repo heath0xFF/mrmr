@@ -28,9 +28,10 @@
 package filter
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
-	"reflect"
+	"math/big"
 	"strings"
 
 	"github.com/heath0xff/mrmr/internal/event"
@@ -222,7 +223,7 @@ const (
 
 func classify(v any) kind {
 	switch v.(type) {
-	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, float32, float64:
+	case json.Number, int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, float32, float64:
 		return kindNumber
 	case string:
 		return kindString
@@ -232,23 +233,24 @@ func classify(v any) kind {
 	return kindOpaque
 }
 
-// toFloat normalizes a numeric value to float64, reporting whether the
-// result is usable for a comparison. Non-finite inputs (NaN, Inf) are
-// not comparable: NaN never equals itself, so an eq check can never
-// match and a neq check would pass every value, malformed data
-// included. They are reported incomparable instead of compared.
-func toFloat(v any) (float64, bool) {
-	rv := reflect.ValueOf(v)
-	switch rv.Kind() {
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		return float64(rv.Int()), true
-	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		return float64(rv.Uint()), true
-	case reflect.Float32, reflect.Float64:
-		f := rv.Float()
-		return f, finite(f)
+// toNumber compares numeric spellings exactly: preserving IDs at ingestion
+// is useless if a filter immediately aliases adjacent large integers again.
+// The finite check also bounds JSON exponents before big.Rat allocates them;
+// malformed/non-finite values remain incomparable for both eq and neq.
+func toNumber(v any) (*big.Rat, bool) {
+	if n, ok := v.(json.Number); ok {
+		f, err := n.Float64()
+		if err != nil || !finite(f) {
+			return nil, false
+		}
+		if f == 0 {
+			// ParseFloat permits underflow. Reject nonzero mantissas rather
+			// than allocating an enormous denominator for e.g. 1e-999999999.
+			mantissa, _, _ := strings.Cut(strings.ToLower(string(n)), "e")
+			return new(big.Rat), strings.Trim(mantissa, "-0.") == ""
+		}
 	}
-	return 0, false // classify() guarantees a number here
+	return new(big.Rat).SetString(fmt.Sprint(v))
 }
 
 // valueOK reports whether a Spec value can ever take part in a
@@ -274,7 +276,7 @@ func valueOK(v any) bool {
 }
 
 // finite reports whether a number can take part in a comparison.
-// Shared by valueOK (config side) and toFloat (event side) so the
+// Shared by valueOK (config side) and toNumber (event side) so the
 // non-finite rule has one definition.
 func finite(f float64) bool {
 	return !math.IsNaN(f) && !math.IsInf(f, 0)
@@ -286,8 +288,8 @@ func finite(f float64) bool {
 // at the gate, a type-shifted value (the number 5 where a string is
 // expected, "true" where a bool is expected) must not satisfy neq and
 // slide past the gate. Numeric values normalize across int and float
-// representations because YAML decodes 5 as int and JSON decodes it as
-// float64: the same number, two sources. Values of different kinds are
+// representations because YAML decodes 5 as int and ingestion preserves JSON
+// numbers as json.Number: the same number, two sources. Different kinds are
 // incomparable.
 func compare(want, got any) (equal, comparable bool) {
 	k := classify(want)
@@ -296,12 +298,12 @@ func compare(want, got any) (equal, comparable bool) {
 	}
 	switch k {
 	case kindNumber:
-		w, wok := toFloat(want)
-		g, gok := toFloat(got)
+		w, wok := toNumber(want)
+		g, gok := toNumber(got)
 		if !wok || !gok {
 			return false, false
 		}
-		return w == g, true
+		return w.Cmp(g) == 0, true
 	case kindString:
 		return want.(string) == got.(string), true
 	case kindBool:

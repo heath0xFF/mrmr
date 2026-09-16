@@ -70,14 +70,23 @@ func (e *InvalidOutputError) Error() string { return "invalid model output: " + 
 func (c *Client) Interpret(ctx context.Context, cfg Config, interpreter string, prompt string, schema Schema, eventJSON []byte) (result map[string]any, latencyMs int64, model string, err error) {
 	model = cfg.Model
 	sys := prompt + "\n\nRespond with a single JSON object with exactly these fields:\n" + schemaJSON(schema)
-	messages := []message{{"system", sys}, {"user", string(eventJSON)}}
+	req := chatRequest{
+		Model:          cfg.Model,
+		Messages:       []message{{"system", sys}, {"user", string(eventJSON)}},
+		Temperature:    0,
+		ResponseFormat: &responseFormat{Type: "json_schema", JSONSchema: &jsonSchemaFmt{Name: "decision", Strict: true, Schema: schemaMap(schema)}},
+	}
+	hc := &http.Client{Timeout: requestTimeout}
 
 	var (
 		transportErr  error
 		invalidDetail string
 		usedRetry     bool // one self-correction attempt, ever
 	)
-	for calls := 0; calls < maxAttempts; {
+	// Every post consumes the same budget, including response_format fallback.
+	// Once an endpoint rejects the format, keep it disabled for correction
+	// and transport retries within this interpretation, not across clients.
+	for calls := 0; calls < maxAttempts; calls++ {
 		if calls > 0 {
 			select {
 			case <-ctx.Done():
@@ -85,15 +94,19 @@ func (c *Client) Interpret(ctx context.Context, cfg Config, interpreter string, 
 			case <-time.After(retryBackoff):
 			}
 		}
-		content, lat, err := c.complete(ctx, cfg, schema, messages)
-		calls++
-		latencyMs += lat
+		start := time.Now()
+		content, err := c.post(ctx, hc, cfg, req)
+		latencyMs += time.Since(start).Milliseconds()
 		if err != nil {
-			transportErr = fmt.Errorf("model call (attempt %d): %w", calls, err)
+			transportErr = fmt.Errorf("model call (attempt %d): %w", calls+1, err)
 			var se *statusError
 			if errors.As(err, &se) && se.Code < 500 {
-				// 4xx won't get better by retrying. (A response_format 400 was
-				// already handled and exhausted inside complete.)
+				if se.Code == http.StatusBadRequest && req.ResponseFormat != nil {
+					req.ResponseFormat = nil
+					continue
+				}
+				// Other 4xx failures, including a second 400 without the
+				// format, cannot be repaired by another identical request.
 				return nil, latencyMs, model, transportErr
 			}
 			continue // network error or 5xx: retry within the remaining budget
@@ -111,7 +124,7 @@ func (c *Client) Interpret(ctx context.Context, cfg Config, interpreter string, 
 		// validation error so small local models can fix themselves. This
 		// path is expected to be routine and must stay bounded.
 		usedRetry = true
-		messages = append(messages,
+		req.Messages = append(req.Messages,
 			message{"assistant", content},
 			message{"user", "Your previous output failed validation: " + verr.Error() + "\nRespond again with a JSON object matching the schema exactly."},
 		)
@@ -160,37 +173,10 @@ type chatResponse struct {
 // budget.
 type statusError struct {
 	Code int
-	Body string
 }
 
 func (e *statusError) Error() string {
-	return fmt.Sprintf("endpoint returned %d: %s", e.Code, e.Body)
-}
-
-// complete performs one chat completion. It first asks for schema-constrained
-// decoding; endpoints that reject response_format (HTTP 400) are retried once
-// without it, falling back to validation alone. This keeps the client
-// compatible with llama.cpp/vLLM/Ollama endpoints that support grammar
-// constraints as well as plain ones that don't.
-func (c *Client) complete(ctx context.Context, cfg Config, schema Schema, messages []message) (content string, latencyMs int64, err error) {
-	hc := &http.Client{Timeout: requestTimeout}
-	req := chatRequest{
-		Model:          cfg.Model,
-		Messages:       messages,
-		Temperature:    0,
-		ResponseFormat: &responseFormat{Type: "json_schema", JSONSchema: &jsonSchemaFmt{Name: "decision", Strict: true, Schema: schemaMap(schema)}},
-	}
-	for i := 0; i < 2; i++ { // 0: with response_format, 1: without (endpoint lacks schema support)
-		start := time.Now()
-		content, err = c.post(ctx, hc, cfg, req)
-		latencyMs += time.Since(start).Milliseconds()
-		var se *statusError
-		if err == nil || !(errors.As(err, &se) && se.Code == http.StatusBadRequest) {
-			return content, latencyMs, err
-		}
-		req.ResponseFormat = nil
-	}
-	return
+	return fmt.Sprintf("endpoint returned %d", e.Code)
 }
 
 func (c *Client) post(ctx context.Context, hc *http.Client, cfg Config, req chatRequest) (string, error) {
@@ -211,10 +197,11 @@ func (c *Client) post(ctx context.Context, hc *http.Client, cfg Config, req chat
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		// Cap the body we read: endpoint error pages can be arbitrarily large
-		// and only the first line or two is ever useful in a trace.
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-		return "", &statusError{Code: resp.StatusCode, Body: strings.TrimSpace(string(b))}
+		// Error pages can echo authorization headers or private prompts.
+		// Keep only the status: these errors reach SQLite, logs, and callers.
+		// A bounded drain permits connection reuse without retaining content.
+		io.Copy(io.Discard, io.LimitReader(resp.Body, 2048))
+		return "", &statusError{Code: resp.StatusCode}
 	}
 	var cr chatResponse
 	if err := json.NewDecoder(resp.Body).Decode(&cr); err != nil {

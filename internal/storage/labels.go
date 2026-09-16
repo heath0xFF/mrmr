@@ -188,13 +188,19 @@ func decodeStoredEvent(id, typ, source, subject, eventTime string, dataJSON, met
 		return event.Event{}, fmt.Errorf("decode event %s time: %w", id, err)
 	}
 	e := event.Event{ID: id, Type: typ, Source: source, Subject: subject, Timestamp: at}
+	// Inspection and dataset export must not re-round identities that
+	// ingestion preserved. Decisions keep their separate schema decoding.
 	if dataJSON.Valid && dataJSON.String != "null" {
-		if err := json.Unmarshal([]byte(dataJSON.String), &e.Data); err != nil {
+		dec := json.NewDecoder(strings.NewReader(dataJSON.String))
+		dec.UseNumber()
+		if err := dec.Decode(&e.Data); err != nil {
 			return event.Event{}, fmt.Errorf("decode event %s data: %w", id, err)
 		}
 	}
 	if metadataJSON.Valid && metadataJSON.String != "null" {
-		if err := json.Unmarshal([]byte(metadataJSON.String), &e.Metadata); err != nil {
+		dec := json.NewDecoder(strings.NewReader(metadataJSON.String))
+		dec.UseNumber()
+		if err := dec.Decode(&e.Metadata); err != nil {
 			return event.Event{}, fmt.Errorf("decode event %s metadata: %w", id, err)
 		}
 	}

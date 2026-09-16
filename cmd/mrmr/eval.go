@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"flag"
@@ -83,8 +84,15 @@ func loadEvalCases(path string) ([]evalCase, error) {
 			continue
 		}
 		var tc evalCase
-		if err := json.Unmarshal(s.Bytes(), &tc); err != nil {
+		// Exported numeric identities must survive evaluation as written,
+		// not round through float64 before reaching the model.
+		dec := json.NewDecoder(bytes.NewReader(s.Bytes()))
+		dec.UseNumber()
+		if err := dec.Decode(&tc); err != nil {
 			return nil, fmt.Errorf("parse dataset %s line %d: %w", path, line, err)
+		}
+		if err := dec.Decode(new(any)); err != io.EOF {
+			return nil, fmt.Errorf("parse dataset %s line %d: expected one JSON object", path, line)
 		}
 		if tc.Name == "" || tc.Event.Type == "" || tc.Event.Source == "" || tc.Expected.Category == "" || tc.Expected.RequiresAction == nil {
 			return nil, fmt.Errorf("parse dataset %s line %d: name, event type/source, category, and requires_action are required", path, line)
@@ -108,8 +116,14 @@ func evaluate(ctx context.Context, cfg *config.Config, cases []evalCase, progres
 	client := &model.Client{}
 	for i, tc := range cases {
 		e := tc.Event
-		e.ID = fmt.Sprintf("eval_%03d", i+1)
-		e.Timestamp = time.Date(2026, time.January, 1, 12, 0, 0, 0, time.UTC)
+		// Generated fixtures may omit identity/time; keep their defaults
+		// deterministic without rewriting the evidence in real events.
+		if e.ID == "" {
+			e.ID = fmt.Sprintf("eval_%03d", i+1)
+		}
+		if e.Timestamp.IsZero() {
+			e.Timestamp = time.Date(2026, time.January, 1, 12, 0, 0, 0, time.UTC)
+		}
 		payload, _ := json.Marshal(e)
 		result, _, _, err := client.Interpret(ctx, cfg.Models[cfg.Interpret.Model], cfg.Interpret.Model, cfg.Interpret.Prompt, cfg.Interpret.Schema, payload)
 

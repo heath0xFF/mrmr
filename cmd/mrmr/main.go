@@ -220,7 +220,11 @@ func eventsHandler(rt *runtime.Runtime) http.HandlerFunc {
 		// to eat memory. 1 MiB is generous headroom over any real event.
 		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 		var req eventsRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		// IDs and payload numbers must remain exact before deduplication;
+		// float64 aliases distinct integers above 2^53.
+		dec := json.NewDecoder(r.Body)
+		dec.UseNumber()
+		if err := dec.Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, "malformed JSON body: "+err.Error())
 			return
 		}

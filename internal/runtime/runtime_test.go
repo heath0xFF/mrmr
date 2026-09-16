@@ -224,6 +224,43 @@ func TestIngestInvalidOutputTwiceFailsTowardIgnore(t *testing.T) {
 	hasStages(t, resp, "receive", "persist", "interpret", "policy", "outcome")
 }
 
+// Endpoint error pages are untrusted even when the endpoint is configured:
+// a proxy can reflect credentials, which must never reach any audit surface.
+func TestIngestEndpointErrorDoesNotExposeSecrets(t *testing.T) {
+	const key = "test-only-reflected-api-key"
+	const private = "test-only-private-error-body"
+	t.Setenv("TEST_MODEL_KEY", key)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+key {
+			t.Error("model authentication missing")
+		}
+		http.Error(w, private+" "+r.Header.Get("Authorization"), http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+	rt := newTestRuntime(t, srv.URL)
+	rt.ModelCfg.APIKeyEnv = "TEST_MODEL_KEY"
+	resp, err := rt.Ingest(context.Background(), testEvent("reflected-key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Decision.Status != "errored" || resp.Outcome != "ignore" || !strings.Contains(resp.Decision.Error, "401") {
+		t.Fatalf("want status-only endpoint error routed to ignore, got %+v", resp)
+	}
+	ins, err := rt.DB.Inspect(resp.EventID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, surface := range []any{resp, ins} {
+		b, err := json.Marshal(surface)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(b), key) || strings.Contains(string(b), private) {
+			t.Error("endpoint response content leaked into response/audit data")
+		}
+	}
+}
+
 func TestIngestModelEndpointDownFailsTowardIgnore(t *testing.T) {
 	// The endpoint 500s on every transport attempt: the decision is
 	// recorded as errored and the outcome is ignore. Failures of the
@@ -372,7 +409,30 @@ func httpTarget(t *testing.T) (url string, method *string, body *string, status 
 	return srv.URL, &m, &b, &code
 }
 
+// A bare HTTP action must send the result object, not stdout's [event] prefix.
 func TestIngestHTTPActionPostsDefaultBody(t *testing.T) {
+	targetURL, method, body, _ := httpTarget(t)
+	url, _ := modelServer(t, `{"category":"important","importance":0.95}`)
+	rt := newTestRuntime(t, url)
+	rt.Policy = policy.Policy{Default: policy.Then{Action: &policy.Action{Type: "http", URL: targetURL}}}
+	resp, err := rt.Ingest(context.Background(), testEvent("default-body"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := json.Marshal(resp.Decision.Result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if *method != http.MethodPost || *body != string(want) || !json.Valid([]byte(*body)) {
+		t.Fatalf("method=%s body=%q, want POST with result JSON %s", *method, *body, want)
+	}
+	// The JSON fix must not change the human-readable stdout default.
+	if got := renderMessage("", resp.Decision); got != "["+resp.EventID+"] "+string(want) {
+		t.Fatalf("notify default changed: %q", got)
+	}
+}
+
+func TestIngestHTTPActionPostsTemplateBody(t *testing.T) {
 	targetURL, gotMethod, gotBody, _ := httpTarget(t)
 	url, _ := modelServer(t, `{"category":"important","importance":0.95}`)
 	rt := newTestRuntime(t, url)

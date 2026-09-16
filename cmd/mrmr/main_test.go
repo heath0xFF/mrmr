@@ -146,6 +146,31 @@ func TestEventsHandlerValidEvent(t *testing.T) {
 	}
 }
 
+// The API and poller share the same dedup boundary. Fixing numeric feed IDs
+// must not leave webhook deliveries rounding to the same storage key.
+func TestEventsHandlerPreservesNumericIDs(t *testing.T) {
+	for _, field := range []string{`"metadata":{"source_event_id":%s}`, `"data":{"id":%s}`} {
+		h, calls := newTestHandler(t, `{"category":"unimportant","importance":0.1}`)
+		for i, id := range []string{"9007199254740992", "9007199254740993", "9007199254740993"} {
+			body := `{"type":"test","source":"api",` + fmt.Sprintf(field, id) + `}`
+			rec := post(t, h, "application/json", body)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+			}
+			var resp runtime.Response
+			if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+				t.Fatal(err)
+			}
+			if resp.Duplicate != (i == 2) {
+				t.Fatalf("field %s delivery %d duplicate=%v", field, i, resp.Duplicate)
+			}
+		}
+		if calls.Load() != 2 {
+			t.Fatalf("model calls=%d, want 2", calls.Load())
+		}
+	}
+}
+
 func TestEventsHandlerRejectsBadRequests(t *testing.T) {
 	tests := []struct {
 		name string

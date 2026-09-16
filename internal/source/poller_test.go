@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/heath0xff/mrmr/internal/config"
+	"github.com/heath0xff/mrmr/internal/filter"
 	"github.com/heath0xff/mrmr/internal/model"
 	"github.com/heath0xff/mrmr/internal/policy"
 	"github.com/heath0xff/mrmr/internal/runtime"
@@ -156,6 +157,44 @@ func TestPollerIngestsEachItemOnce(t *testing.T) {
 	}
 }
 
+// Large adjacent IDs must stay distinct through ingestion, replay, and reads.
+func TestPollerPreservesNumericIDs(t *testing.T) {
+	modelURL, calls := modelMock(t)
+	feedURL, _ := feedServer(t, `{"items":[
+		{"id":9007199254740992,"count":5},
+		{"id":9007199254740993,"count":5}]}`)
+	rt := testRuntime(t, modelURL)
+	// UseNumber must preserve the existing numeric-filter behavior too.
+	rt.Filters = filter.List{{Field: "data.count", Value: 5}}
+	p, err := NewHTTPPoller(pollerCfg(feedURL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.poll(context.Background(), rt)
+	p.poll(context.Background(), rt)
+	if countEvents(t, rt) != 2 || calls.Load() != 2 {
+		t.Fatalf("want two distinct events, replay deduplicated; events=%d calls=%d", countEvents(t, rt), calls.Load())
+	}
+	if c, err := rt.DB.Cursor("feed"); err != nil || c != "9007199254740993" {
+		t.Fatalf("cursor=%q err=%v, want exact maximum ID", c, err)
+	}
+	rows, err := rt.DB.ListEvents(10, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	for _, row := range rows {
+		id, ok := row.Event.Data["id"].(json.Number)
+		if !ok {
+			t.Fatalf("stored ID lost its exact representation: %#v", row.Event.Data["id"])
+		}
+		seen[string(id)] = true
+	}
+	if !seen["9007199254740992"] || !seen["9007199254740993"] {
+		t.Fatalf("stored IDs changed: %v", seen)
+	}
+}
+
 // TestPollerSubstitutesCursorIntoURL pins the cursor-based-API case: the
 // first fetch has no cursor, later fetches carry the persisted one.
 func TestPollerSubstitutesCursorIntoURL(t *testing.T) {
@@ -279,6 +318,11 @@ func TestPollerIncompleteBatchKeepsCursor(t *testing.T) {
 		{"event write failure", `{"id":"c"}`},
 		{"non-object", `null`},
 		{"missing id", `{"title":"missing id"}`},
+		{"null id", `{"id":null}`},
+		{"empty id", `{"id":""}`},
+		{"object id", `{"id":{"key":"c"}}`},
+		{"array id", `{"id":["c"]}`},
+		{"boolean id", `{"id":true}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			modelURL, modelCalls := modelMock(t)

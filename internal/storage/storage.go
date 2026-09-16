@@ -209,10 +209,7 @@ func now() string { return time.Now().UTC().Format(time.RFC3339Nano) }
 func (d *DB) InsertEvent(e event.Event) (*EventRecord, error) {
 	data, _ := json.Marshal(e.Data)
 	meta, _ := json.Marshal(e.Metadata)
-	dedup := ""
-	if v, ok := e.Metadata["source_event_id"]; ok {
-		dedup = fmt.Sprint(v)
-	}
+	dedup := event.SourceEventID(e.Metadata["source_event_id"])
 	if dedup == "" {
 		h := sha256.New()
 		fmt.Fprint(h, e.Type, "\x00", e.Subject, "\x00", string(data))

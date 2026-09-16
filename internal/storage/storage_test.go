@@ -92,6 +92,64 @@ func TestInsertEventDuplicateByPayloadHash(t *testing.T) {
 	}
 }
 
+// Malformed optional IDs are absent identities, not shared synthetic keys.
+// Hash fallback must still suppress actual redeliveries of the same payload.
+func TestInvalidSourceEventIDFallsBackToPayload(t *testing.T) {
+	for _, id := range []any{nil, "", true, []any{"id"}, map[string]any{"id": "x"}} {
+		d := openTestDB(t)
+		for i, payload := range []string{"first", "second", "second"} {
+			e := testEvent("", map[string]any{"message": payload})
+			e.Metadata = map[string]any{"source_event_id": id}
+			rec, err := d.InsertEvent(e)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if rec.Duplicate != (i == 2) {
+				t.Fatalf("id=%#v payload=%q duplicate=%v", id, payload, rec.Duplicate)
+			}
+		}
+	}
+}
+
+// Every read path feeds inspection or export. None may undo exact ingestion
+// by silently rounding a numeric identity on the way back out of SQLite.
+func TestEventNumbersSurviveStorageReads(t *testing.T) {
+	d := openTestDB(t)
+	const id = json.Number("9007199254740993")
+	e := testEvent("", map[string]any{"id": id})
+	e.Metadata = map[string]any{"source_event_id": id}
+	if _, err := d.InsertEvent(e); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.LabelEvent(e.ID, "important", true, "notify"); err != nil {
+		t.Fatal(err)
+	}
+	ins, err := d.Inspect(e.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	list, err := d.ListEvents(10, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	labeled, err := d.LabeledEvents()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 || len(labeled) != 1 {
+		t.Fatal("stored event missing from review/export")
+	}
+	for _, got := range []event.Event{ins.Event, list[0].Event, labeled[0].Event} {
+		if got.Data["id"] != id || got.Metadata["source_event_id"] != id {
+			t.Fatalf("numeric identity changed: %+v", got)
+		}
+		got.ID = event.NewID("evt_")
+		if rec, err := d.InsertEvent(got); err != nil || !rec.Duplicate {
+			t.Fatalf("round-tripped event did not deduplicate: rec=%+v err=%v", rec, err)
+		}
+	}
+}
+
 func TestDecisionRoundTrip(t *testing.T) {
 	d := openTestDB(t)
 	ev, err := d.InsertEvent(testEvent("gh-1", nil))

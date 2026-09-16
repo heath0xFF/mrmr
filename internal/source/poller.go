@@ -178,8 +178,15 @@ func (p *HTTPPoller) fetch(ctx context.Context, db *storage.DB) ([]any, error) {
 	}
 
 	var doc any
-	if err := json.Unmarshal(body, &doc); err != nil {
+	// Preserve numeric cursor identities and payloads before deduplication.
+	// Adjacent 64-bit IDs can collapse to the same float64 otherwise.
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.UseNumber()
+	if err := dec.Decode(&doc); err != nil {
 		return nil, fmt.Errorf("decode JSON: %w", err)
+	}
+	if err := dec.Decode(new(any)); err != io.EOF {
+		return nil, fmt.Errorf("decode JSON: expected one value")
 	}
 	items := doc
 	if p.cfg.ItemPath != "" {
@@ -232,7 +239,7 @@ func (p *HTTPPoller) normalize(item map[string]any) (event.Event, error) {
 		if c := cursorValue(item, p.cfg.CursorField); c != "" {
 			e.Metadata = map[string]any{"source_event_id": c}
 		} else {
-			return e, fmt.Errorf("cursor_field %q missing; item cannot be deduplicated", p.cfg.CursorField)
+			return e, fmt.Errorf("cursor_field %q missing or invalid; item cannot be deduplicated", p.cfg.CursorField)
 		}
 	}
 	return e, nil
@@ -242,10 +249,9 @@ func cursorValue(item map[string]any, field string) string {
 	if field == "" {
 		return ""
 	}
-	if v, ok := item[field]; ok {
-		return fmt.Sprint(v)
-	}
-	return ""
+	// Share the storage identity rule: null/objects/arrays must not turn
+	// into synthetic IDs that collapse unrelated records or advance cursors.
+	return event.SourceEventID(item[field])
 }
 
 // cursor reads the persisted watermark. An unknown source is a fresh poller:

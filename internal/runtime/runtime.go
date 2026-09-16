@@ -270,9 +270,20 @@ func (r *Runtime) execute(ctx context.Context, t policy.Then, dec *event.Decisio
 			if method == "" {
 				method = http.MethodPost
 			}
-			// Body template over the decision; empty body is the full result
-			// JSON, same default as notify, so a bare action is still useful.
-			return r.do(ctx, method, t.Action.URL, renderMessage(t.Action.Body, dec))
+			// A default action body is JSON, not the human-readable notify
+			// envelope. Reusing that envelope prefixes an event ID and sends
+			// invalid JSON to an endpoint promised application/json.
+			var body string
+			if t.Action.Body == "" {
+				payload, err := json.Marshal(dec.Result)
+				if err != nil {
+					return fmt.Sprintf("encode action body: %v", err)
+				}
+				body = string(payload)
+			} else {
+				body = renderMessage(t.Action.Body, dec)
+			}
+			return r.do(ctx, method, t.Action.URL, body)
 		case "emit":
 			// The decision result becomes the child's data — the child flow's
 			// interpreter judges meaning, it does not re-parse the parent's
