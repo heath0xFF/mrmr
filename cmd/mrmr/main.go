@@ -95,14 +95,15 @@ func run(args []string) error {
 	defer db.Close()
 
 	rt := &runtime.Runtime{
-		DB:       db,
-		Client:   &model.Client{},
-		ModelCfg: cfg.Models[cfg.Interpret.Model],
-		ModelKey: cfg.Interpret.Model,
-		Prompt:   cfg.Interpret.Prompt,
-		Schema:   cfg.Interpret.Schema,
-		Policy:   cfg.Policy,
-		Filters:  cfg.Filter,
+		DB:        db,
+		Client:    &model.Client{},
+		ModelCfg:  cfg.Models[cfg.Interpret.Model],
+		ModelKey:  cfg.Interpret.Model,
+		Prompt:    cfg.Interpret.Prompt,
+		Schema:    cfg.Interpret.Schema,
+		Questions: cfg.Interpret.Questions,
+		Policy:    cfg.Policy,
+		Filters:   cfg.Filter,
 	}
 	// Resolve delegation endpoints once at startup; policy rules reference
 	// agents by name only.

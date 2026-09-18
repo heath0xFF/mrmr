@@ -1,10 +1,8 @@
-// Package model talks to OpenAI-compatible chat completion endpoints and
-// returns schema-validated structured results. Everything here treats the
-// model as an untrusted producer of JSON: output is parsed defensively,
-// validated against the configured schema, and retried exactly once with the
-// validation error appended so small local models can self-correct. The
-// caller (the runtime) decides what a bad result means — this package only
-// reports it.
+// Package model talks to configured interpretation endpoints and returns
+// validated structured results. Everything here treats model responses as
+// untrusted: provider-specific clients validate the complete response before
+// the runtime can persist it or pass it to policy. The caller decides what a
+// bad result means — this package only reports it.
 package model
 
 import (
@@ -24,7 +22,7 @@ import (
 // name only (api_key_env) — never inlined — so config files stay safe to
 // commit and inspect.
 type Config struct {
-	Provider  string `yaml:"provider"` // openai-compatible (only one for now)
+	Provider  string `yaml:"provider"` // openai-compatible | typesafe
 	BaseURL   string `yaml:"base_url"`
 	APIKeyEnv string `yaml:"api_key_env"`
 	Model     string `yaml:"model"`
@@ -52,22 +50,32 @@ type InvalidOutputError struct{ Detail string }
 
 func (e *InvalidOutputError) Error() string { return "invalid model output: " + e.Detail }
 
-// Interpret sends the event to the configured model and returns the
-// validated result map. Error is *InvalidOutputError when the output failed
-// schema validation after its one self-correction retry; other errors are
-// transport/endpoint failures. The distinction matters to the caller: invalid
-// output is the model's fault and is recorded on the decision; transport
-// failure is an endpoint outage and must not be retried indefinitely by anyone.
-//
-// Two bounds apply together on a single call budget of maxAttempts: a
-// schema-invalid output is retried exactly once with the validation error
-// appended (IMPLEMENTATION.md pins this), and transport failures (network
-// errors, 5xx) consume the remaining budget rather than aborting mid-loop,
-// so one blip during self-correction doesn't fail an event that had calls
-// left. Non-retryable client errors (401 wrong key, 404 wrong model) return
-// immediately — retrying those is pure noise. Latency sums every call: the
-// trace cares how long interpretation took in total, corrections included.
+// Interpret preserves the original OpenAI-compatible call surface for small
+// callers and tests. Runtime code uses InterpretWithQuestions so a TypeSafe
+// interpretation can carry its configured primitives.
 func (c *Client) Interpret(ctx context.Context, cfg Config, interpreter string, prompt string, schema Schema, eventJSON []byte) (result map[string]any, latencyMs int64, model string, err error) {
+	return c.InterpretWithQuestions(ctx, cfg, interpreter, prompt, schema, nil, eventJSON)
+}
+
+// InterpretWithQuestions dispatches one event to the selected provider.
+// Keeping this concrete avoids a provider framework: there are exactly two
+// real protocols, and each validates its response before returning a Decision.
+func (c *Client) InterpretWithQuestions(ctx context.Context, cfg Config, interpreter string, prompt string, schema Schema, questions Questions, eventJSON []byte) (result map[string]any, latencyMs int64, model string, err error) {
+	switch cfg.Provider {
+	case "openai-compatible":
+		return c.interpretOpenAI(ctx, cfg, interpreter, prompt, schema, eventJSON)
+	case "typesafe":
+		return c.interpretTypeSafe(ctx, cfg, questions, eventJSON)
+	default:
+		return nil, 0, cfg.Model, fmt.Errorf("unsupported model provider %q", cfg.Provider)
+	}
+}
+
+// interpretOpenAI sends the event to an OpenAI-compatible model. Error is
+// *InvalidOutputError when output fails schema validation after one correction;
+// other errors are endpoint failures. All retries share maxAttempts, and
+// latency sums model calls but not backoff sleeps.
+func (c *Client) interpretOpenAI(ctx context.Context, cfg Config, interpreter string, prompt string, schema Schema, eventJSON []byte) (result map[string]any, latencyMs int64, model string, err error) {
 	model = cfg.Model
 	sys := prompt + "\n\nRespond with a single JSON object with exactly these fields:\n" + schemaJSON(schema)
 	req := chatRequest{

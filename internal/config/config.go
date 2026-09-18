@@ -30,9 +30,10 @@ type DB struct {
 }
 
 type Interpret struct {
-	Model  string       `yaml:"model"`
-	Prompt string       `yaml:"prompt"`
-	Schema model.Schema `yaml:"schema"`
+	Model     string          `yaml:"model"`
+	Prompt    string          `yaml:"prompt"`
+	Schema    model.Schema    `yaml:"schema"`
+	Questions model.Questions `yaml:"questions"`
 }
 
 // Source configures a built-in pull adapter. Common fields name its events
@@ -137,34 +138,49 @@ func (c *Config) Validate() error {
 	if !ok {
 		return fmt.Errorf("config: interpret.model %q not defined in models", c.Interpret.Model)
 	}
-	if mc.Provider != "openai-compatible" {
-		return fmt.Errorf("config: model %q: unsupported provider %q (v0.1: openai-compatible)", c.Interpret.Model, mc.Provider)
-	}
 	if mc.BaseURL == "" {
 		return fmt.Errorf("config: model %q: base_url is required", c.Interpret.Model)
 	}
-	if c.Interpret.Prompt == "" {
-		return fmt.Errorf("config: interpret.prompt is required")
-	}
-	if len(c.Interpret.Schema) == 0 {
-		return fmt.Errorf("config: interpret.schema is required")
-	}
-	for name, f := range c.Interpret.Schema {
-		switch f.Type {
-		case "string", "number", "boolean":
-		default:
-			return fmt.Errorf("config: schema field %q: unsupported type %q", name, f.Type)
+	switch mc.Provider {
+	case "openai-compatible":
+		if c.Interpret.Prompt == "" {
+			return fmt.Errorf("config: interpret.prompt is required for openai-compatible models")
 		}
-		if f.Type != "number" && (f.Minimum != nil || f.Maximum != nil) {
-			return fmt.Errorf("config: schema field %q: minimum/maximum require type number", name)
+		if len(c.Interpret.Schema) == 0 {
+			return fmt.Errorf("config: interpret.schema is required for openai-compatible models")
 		}
-		if (f.Minimum != nil && (math.IsNaN(*f.Minimum) || math.IsInf(*f.Minimum, 0))) ||
-			(f.Maximum != nil && (math.IsNaN(*f.Maximum) || math.IsInf(*f.Maximum, 0))) {
-			return fmt.Errorf("config: schema field %q: minimum/maximum must be finite", name)
+		if len(c.Interpret.Questions) != 0 {
+			return fmt.Errorf("config: interpret.questions requires a typesafe model")
 		}
-		if f.Minimum != nil && f.Maximum != nil && *f.Minimum > *f.Maximum {
-			return fmt.Errorf("config: schema field %q: minimum must not exceed maximum", name)
+		for name, f := range c.Interpret.Schema {
+			switch f.Type {
+			case "string", "number", "boolean":
+			default:
+				return fmt.Errorf("config: schema field %q: unsupported type %q", name, f.Type)
+			}
+			if f.Type != "number" && (f.Minimum != nil || f.Maximum != nil) {
+				return fmt.Errorf("config: schema field %q: minimum/maximum require type number", name)
+			}
+			if (f.Minimum != nil && (math.IsNaN(*f.Minimum) || math.IsInf(*f.Minimum, 0))) ||
+				(f.Maximum != nil && (math.IsNaN(*f.Maximum) || math.IsInf(*f.Maximum, 0))) {
+				return fmt.Errorf("config: schema field %q: minimum/maximum must be finite", name)
+			}
+			if f.Minimum != nil && f.Maximum != nil && *f.Minimum > *f.Maximum {
+				return fmt.Errorf("config: schema field %q: minimum must not exceed maximum", name)
+			}
 		}
+	case "typesafe":
+		if mc.APIKeyEnv == "" {
+			return fmt.Errorf("config: model %q: api_key_env is required for typesafe", c.Interpret.Model)
+		}
+		if c.Interpret.Prompt != "" || len(c.Interpret.Schema) != 0 {
+			return fmt.Errorf("config: interpret.prompt/schema are not supported for typesafe; use questions")
+		}
+		if err := model.ValidateQuestions(c.Interpret.Questions); err != nil {
+			return fmt.Errorf("config: interpret.questions: %w", err)
+		}
+	default:
+		return fmt.Errorf("config: model %q: unsupported provider %q (openai-compatible, typesafe)", c.Interpret.Model, mc.Provider)
 	}
 	for i, f := range c.Filter {
 		if err := f.Validate(); err != nil {

@@ -103,15 +103,30 @@ func (p Policy) Evaluate(result map[string]any) (Then, int) {
 func matchesAll(conds map[string]any, result map[string]any) bool {
 	for key, want := range conds {
 		path := strings.TrimPrefix(key, "result.")
-		got, ok := result[path]
-		if !ok {
-			return false
-		}
-		if !match(want, got) {
+		got, ok := lookup(result, path)
+		if !ok || !match(want, got) {
 			return false
 		}
 	}
 	return true
+}
+
+// lookup follows dot-separated object fields. Flat results keep their
+// existing behavior, while typed interpreters can expose raw nested answers
+// such as category.choice without flattening away probabilities.
+func lookup(result map[string]any, path string) (any, bool) {
+	var current any = result
+	for _, part := range strings.Split(path, ".") {
+		object, ok := current.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		current, ok = object[part]
+		if !ok {
+			return nil, false
+		}
+	}
+	return current, true
 }
 
 // match compares a condition value against the actual result value. A

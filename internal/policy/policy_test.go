@@ -67,6 +67,28 @@ func TestEvaluateLiteralEquality(t *testing.T) {
 	}
 }
 
+func TestEvaluateNestedResultFields(t *testing.T) {
+	p := Policy{
+		Rules: []Rule{{If: map[string]any{
+			"result.category.choice":      "incident",
+			"result.category.confidence":  ">= 0.8",
+			"result.requires_action.noul": ">= 0.8",
+		}, Then: notify()}},
+		Default: ignore(),
+	}
+	result := map[string]any{
+		"category":        map[string]any{"choice": "incident", "confidence": 0.9},
+		"requires_action": map[string]any{"noul": 0.85},
+	}
+	if !isNotify(eval(t, p, result)) {
+		t.Error("nested typed answer should match")
+	}
+	result["category"].(map[string]any)["confidence"] = 0.7
+	if isNotify(eval(t, p, result)) {
+		t.Error("nested value below threshold must not match")
+	}
+}
+
 func TestEvaluateFirstMatchWins(t *testing.T) {
 	// Both rules match; the earlier one must win. Rule order is the only
 	// tiebreaker — policy has no priorities or scores.

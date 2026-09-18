@@ -52,11 +52,21 @@ func eval(args []string) error {
 	if err != nil {
 		return err
 	}
-	if f, ok := cfg.Interpret.Schema["category"]; !ok || f.Type != "string" {
-		return fmt.Errorf("eval requires string interpret.schema field %q", "category")
-	}
-	if f, ok := cfg.Interpret.Schema["requires_action"]; !ok || f.Type != "boolean" {
-		return fmt.Errorf("eval requires boolean interpret.schema field %q", "requires_action")
+	switch cfg.Models[cfg.Interpret.Model].Provider {
+	case "openai-compatible":
+		if f, ok := cfg.Interpret.Schema["category"]; !ok || f.Type != "string" {
+			return fmt.Errorf("eval requires string interpret.schema field %q", "category")
+		}
+		if f, ok := cfg.Interpret.Schema["requires_action"]; !ok || f.Type != "boolean" {
+			return fmt.Errorf("eval requires boolean interpret.schema field %q", "requires_action")
+		}
+	case "typesafe":
+		if q, ok := cfg.Interpret.Questions["category"]; !ok || q.Type != "choice" {
+			return fmt.Errorf("eval requires choice interpret.questions entry %q", "category")
+		}
+		if q, ok := cfg.Interpret.Questions["requires_action"]; !ok || q.Type != "noul" {
+			return fmt.Errorf("eval requires noul interpret.questions entry %q", "requires_action")
+		}
 	}
 	cases, err := loadEvalCases(*datasetPath)
 	if err != nil {
@@ -125,13 +135,13 @@ func evaluate(ctx context.Context, cfg *config.Config, cases []evalCase, progres
 			e.Timestamp = time.Date(2026, time.January, 1, 12, 0, 0, 0, time.UTC)
 		}
 		payload, _ := json.Marshal(e)
-		result, _, _, err := client.Interpret(ctx, cfg.Models[cfg.Interpret.Model], cfg.Interpret.Model, cfg.Interpret.Prompt, cfg.Interpret.Schema, payload)
+		result, _, _, err := client.InterpretWithQuestions(ctx, cfg.Models[cfg.Interpret.Model], cfg.Interpret.Model, cfg.Interpret.Prompt, cfg.Interpret.Schema, cfg.Interpret.Questions, payload)
 
 		category, requiresAction, outcome := "", false, "ignore"
 		if err == nil {
 			summary.ValidDecisions++
-			category, _ = result["category"].(string)
-			requiresAction, _ = result["requires_action"].(bool)
+			category = evaluatedCategory(result)
+			requiresAction = evaluatedRequiresAction(result)
 			then, _ := cfg.Policy.Evaluate(result)
 			outcome = then.Outcome()
 		}
@@ -169,6 +179,32 @@ func evaluate(ctx context.Context, cfg *config.Config, cases []evalCase, progres
 	summary.OutcomeAccuracy = ratio(summary.OutcomeCorrect, summary.Total)
 	summary.FalseIgnoreRate = ratio(summary.FalseIgnores, summary.ExpectedNonIgnore)
 	return summary
+}
+
+// The evaluation dataset predates provider-specific result shapes. Preserve
+// its labels while reading either a flat OpenAI-compatible result or the raw
+// typed TypeSafe answer. A Noul's natural yes/no boundary is 0.5; policy may
+// and usually should use a stricter threshold for consequential outcomes.
+func evaluatedCategory(result map[string]any) string {
+	if value, ok := result["category"].(string); ok {
+		return value
+	}
+	if answer, ok := result["category"].(map[string]any); ok {
+		value, _ := answer["choice"].(string)
+		return value
+	}
+	return ""
+}
+
+func evaluatedRequiresAction(result map[string]any) bool {
+	if value, ok := result["requires_action"].(bool); ok {
+		return value
+	}
+	if answer, ok := result["requires_action"].(map[string]any); ok {
+		value, _ := answer["noul"].(float64)
+		return value >= 0.5
+	}
+	return false
 }
 
 func ratio(n, total int) float64 {

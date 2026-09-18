@@ -61,7 +61,7 @@ func TestEvaluatePreservesRecordedEvent(t *testing.T) {
 	}))
 	defer srv.Close()
 	cfg := &config.Config{
-		Models: map[string]model.Config{"mock": {BaseURL: srv.URL, Model: "mock"}},
+		Models: map[string]model.Config{"mock": {Provider: "openai-compatible", BaseURL: srv.URL, Model: "mock"}},
 		Interpret: config.Interpret{Model: "mock", Schema: model.Schema{
 			"category": {Type: "string"}, "requires_action": {Type: "boolean"},
 		}},
@@ -76,6 +76,42 @@ func TestEvaluatePreservesRecordedEvent(t *testing.T) {
 	evaluate(context.Background(), cfg, cases, io.Discard)
 	if observed.ID != "eval_001" || observed.Timestamp.Format(time.RFC3339) != "2026-01-01T12:00:00Z" {
 		t.Fatalf("missing fixture defaults: %+v", observed)
+	}
+}
+
+func TestEvaluateTypeSafeMetrics(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"model": "jev-1.13.0",
+			"answers": map[string]any{
+				"category": map[string]any{
+					"type": "choice", "choice": "incident", "confidence": 0.9,
+					"probabilities": map[string]any{"incident": 0.9, "noise": 0.1},
+				},
+				"requires_action": map[string]any{"type": "noul", "noul": 0.8},
+			},
+			"usage": map[string]any{"input_tokens": 10, "output_tokens": 4},
+		})
+	}))
+	defer srv.Close()
+	cfg := &config.Config{
+		Models: map[string]model.Config{"jev": {Provider: "typesafe", BaseURL: srv.URL, Model: "jev-latest"}},
+		Interpret: config.Interpret{Model: "jev", Questions: model.Questions{
+			"category":        {Type: "choice", Instructions: "Which category?", Criteria: map[string]any{"incident": "Broken", "noise": "Routine"}},
+			"requires_action": {Type: "noul", Instructions: "Does this require action?"},
+		}},
+		Policy: policy.Policy{
+			Rules:   []policy.Rule{{If: map[string]any{"result.requires_action.noul": ">= 0.75"}, Then: policy.Then{Notify: &policy.Notify{Via: "stdout"}}}},
+			Default: policy.Then{Ignore: true},
+		},
+	}
+	yes := true
+	cases := []evalCase{{Name: "jev", Event: event.Event{Type: "test", Source: "test"}}}
+	cases[0].Expected.Category, cases[0].Expected.RequiresAction, cases[0].Expected.Outcome = "incident", &yes, "notify"
+
+	summary := evaluate(context.Background(), cfg, cases, io.Discard)
+	if summary.ValidDecisions != 1 || summary.CategoryCorrect != 1 || summary.ActionCorrect != 1 || summary.OutcomeCorrect != 1 {
+		t.Fatalf("TypeSafe summary = %+v", summary)
 	}
 }
 

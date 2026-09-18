@@ -312,6 +312,89 @@ func TestValidateAcceptsValidConfig(t *testing.T) {
 	}
 }
 
+func TestLoadTypeSafeConfig(t *testing.T) {
+	path := writeConfig(t, `
+models:
+  jev:
+    provider: typesafe
+    base_url: https://api.typesafe.ai/v1
+    api_key_env: TYPESAFE_API_KEY
+    model: jev-1.13.0
+interpret:
+  model: jev
+  questions:
+    category:
+      type: choice
+      instructions: Which category best describes this event?
+      criteria:
+        incident: Something is broken now.
+        noise: Routine activity.
+    requires_action:
+      type: noul
+      instructions: Does this event require operator action?
+      criteria:
+        true: Action is needed.
+        false: No action is needed.
+    severity:
+      type: score
+      instructions: How severe is this event?
+      criteria: [No impact, Degraded with a workaround, Blocking]
+policy:
+  - if:
+      result.category.choice: incident
+      result.category.confidence: ">= 0.8"
+      result.requires_action.noul: ">= 0.8"
+    then:
+      notify:
+        via: stdout
+default:
+  ignore: true
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Models["jev"].Provider != "typesafe" || len(cfg.Interpret.Questions) != 3 {
+		t.Fatalf("loaded TypeSafe config = %+v", cfg)
+	}
+	if _, err := Load(filepath.Join("..", "..", "recipes", "homelab-journal", "mrmr.typesafe.example.yaml")); err != nil {
+		t.Fatalf("load TypeSafe journal recipe: %v", err)
+	}
+}
+
+func TestValidateTypeSafeContract(t *testing.T) {
+	base := func() *Config {
+		c := validConfig()
+		c.Models["m"] = model.Config{Provider: "typesafe", BaseURL: "https://api.typesafe.ai/v1", APIKeyEnv: "TYPESAFE_API_KEY", Model: "jev-1.13.0"}
+		c.Interpret.Prompt, c.Interpret.Schema = "", nil
+		c.Interpret.Questions = model.Questions{"category": {
+			Type: "choice", Instructions: "Which category?",
+			Criteria: map[string]any{"incident": "Broken", "noise": "Routine"},
+		}}
+		return c
+	}
+	if err := base().Validate(); err != nil {
+		t.Fatalf("valid TypeSafe config: %v", err)
+	}
+	for _, tc := range []struct {
+		name string
+		edit func(*Config)
+		want string
+	}{
+		{"missing key env", func(c *Config) { m := c.Models["m"]; m.APIKeyEnv = ""; c.Models["m"] = m }, "api_key_env is required"},
+		{"prompt not allowed", func(c *Config) { c.Interpret.Prompt = "classify" }, "prompt/schema are not supported"},
+		{"questions required", func(c *Config) { c.Interpret.Questions = nil }, "questions are required"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := base()
+			tc.edit(c)
+			if err := c.Validate(); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("Validate() = %v, want containing %q", err, tc.want)
+			}
+		})
+	}
+}
+
 // writeConfig persists YAML text to a temp file so every Load test gets an
 // isolated file; no test writes inside the repo.
 func writeConfig(t *testing.T, content string) string {

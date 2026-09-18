@@ -150,6 +150,46 @@ func TestIngestImportantEventNotifies(t *testing.T) {
 	hasStages(t, resp, "receive", "persist", "interpret", "policy", "outcome")
 }
 
+func TestIngestTypeSafeDecisionUsesNestedPolicy(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"model": "jev-1.13.0",
+			"answers": map[string]any{
+				"category": map[string]any{
+					"type": "choice", "choice": "incident", "confidence": 0.91,
+					"probabilities": map[string]any{"incident": 0.95, "noise": 0.05},
+				},
+				"requires_action": map[string]any{"type": "noul", "noul": 0.9},
+			},
+			"usage": map[string]any{"input_tokens": 50, "output_tokens": 10},
+		})
+	}))
+	defer srv.Close()
+	rt := newTestRuntime(t, srv.URL)
+	rt.ModelCfg = model.Config{Provider: "typesafe", BaseURL: srv.URL, Model: "jev-latest"}
+	rt.Prompt, rt.Schema = "", nil
+	rt.Questions = model.Questions{
+		"category":        {Type: "choice", Instructions: "Which category?", Criteria: map[string]any{"incident": "Broken", "noise": "Routine"}},
+		"requires_action": {Type: "noul", Instructions: "Does this require action?"},
+	}
+	rt.Policy = policy.Policy{
+		Rules: []policy.Rule{{If: map[string]any{
+			"result.category.choice":      "incident",
+			"result.category.confidence":  ">= 0.8",
+			"result.requires_action.noul": ">= 0.8",
+		}, Then: policy.Then{Notify: &policy.Notify{Via: "stdout"}}}},
+		Default: policy.Then{Ignore: true},
+	}
+
+	resp, err := rt.Ingest(context.Background(), testEvent("jev-1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Outcome != "notify" || resp.Decision.Model != "jev-1.13.0" {
+		t.Fatalf("response = %+v, want Jev notification", resp)
+	}
+}
+
 func TestIngestUnimportantEventIgnores(t *testing.T) {
 	url, _ := modelServer(t, `{"category":"unimportant","importance":0.2}`)
 	rt := newTestRuntime(t, url)
@@ -427,8 +467,19 @@ func TestIngestHTTPActionPostsDefaultBody(t *testing.T) {
 		t.Fatalf("method=%s body=%q, want POST with result JSON %s", *method, *body, want)
 	}
 	// The JSON fix must not change the human-readable stdout default.
-	if got := renderMessage("", resp.Decision); got != "["+resp.EventID+"] "+string(want) {
+	if got := renderMessage("", resp.Decision, testEvent("render")); got != "["+resp.EventID+"] "+string(want) {
 		t.Fatalf("notify default changed: %q", got)
+	}
+}
+
+func TestRenderMessageIncludesEventAndNestedResult(t *testing.T) {
+	e := testEvent("template")
+	dec := &event.Decision{EventID: e.ID, Result: map[string]any{
+		"category": map[string]any{"choice": "incident"},
+	}}
+	got := renderMessage("{{ .event.subject }}: {{ .event.data.msg }} ({{ .result.category.choice }})", dec, e)
+	if got != "mrmr: fix bug (incident)" {
+		t.Fatalf("renderMessage() = %q", got)
 	}
 }
 

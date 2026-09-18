@@ -29,7 +29,7 @@ flowchart TD
     Fresh -->|No| Duplicate["Return duplicate<br/>No model call or effect"]
     Fresh -->|Yes| Filter{"Deterministic filters<br/>All checks pass?"}
     Filter -->|No| Ignore["Ignore"]
-    Filter -->|Yes| Interpret["Interpreter<br/>OpenAI-compatible model<br/>Structured output + bounded retries"]
+    Filter -->|Yes| Interpret["Interpreter<br/>OpenAI-compatible or TypeSafe Jev<br/>Validated structured decisions"]
     Interpret --> Decision["Decision<br/>Persist result or failure status"]
     Decision --> Valid{"Validated result?"}
     Valid -->|No| Ignore
@@ -69,7 +69,7 @@ mrmr is early-stage software with a working vertical slice, HTTP polling, and a 
 | --- | --- |
 | Ingestion | `POST /api/events`; HTTP JSON polling; selected Linux system-journal events |
 | Storage | SQLite events, decisions, executions, traces, source cursors, and human labels |
-| Interpretation | OpenAI-compatible chat completions; structured-output requests; local schema validation and bounded retries |
+| Interpretation | OpenAI-compatible chat completions or TypeSafe Jev Choice/Noul/Score questions; validated output and bounded retries |
 | Filtering | Scalar `eq` / `neq` checks on event fields |
 | Policy | ANDed conditions, first-match rules, explicit default |
 | Outcomes | Ignore, stdout notify, HTTP action, emit-event, generic HTTP delegation, shadow |
@@ -94,7 +94,7 @@ The runbook covers environment checks, safe configuration, a real-model smoke te
 You need:
 
 - **Go 1.27**, as declared in [go.mod](go.mod).
-- An **OpenAI-compatible model endpoint** exposing `/chat/completions` beneath its configured base URL. Local inference is optional; using a remote endpoint sends event content to that endpoint.
+- Either an **OpenAI-compatible model endpoint** exposing `/chat/completions`, or a TypeSafe API account for Jev. The shipped quick-start config uses OpenAI-compatible inference. Any hosted endpoint receives the event content sent for interpretation.
 
 Build and configure:
 
@@ -162,9 +162,45 @@ filter:
 
 All checks must pass. `eq` is the default operator. Fields can address `type`, `source`, `subject`, or nested scalar values such as `data.author` and `metadata.origin`; an optional `event.` prefix is accepted.
 
-`interpret` selects a model, a prompt, and a flat result schema. The supported field types are `string`, `number`, and `boolean`, with optional enums and numeric bounds. Every declared field is required, and extra result fields are rejected.
+For an `openai-compatible` model, `interpret` selects a prompt and flat result schema. Supported field types are `string`, `number`, and `boolean`, with optional enums and numeric bounds. Every declared field is required, and extra result fields are rejected.
 
-The client requests schema-constrained decoding. If the endpoint rejects that request with HTTP 400, it retries without the response format; runtime validation still applies. Invalid output gets at most one self-correction retry. Format fallback, self-correction, and endpoint retries share a maximum of three completion attempts. Endpoint HTTP errors retain the status code, not the response body, so reflected credentials or private prompts cannot enter traces through error pages.
+The OpenAI-compatible client requests schema-constrained decoding. If the endpoint rejects that request with HTTP 400, it retries without the response format; runtime validation still applies. Invalid output gets at most one self-correction retry. Format fallback, self-correction, and endpoint retries share a maximum of three completion attempts. Endpoint HTTP errors retain the status code, not the response body, so reflected credentials or private prompts cannot enter traces through error pages.
+
+### TypeSafe Jev
+
+Jev is an optional hosted interpreter. Configure typed questions instead of a generative prompt/schema:
+
+```yaml
+models:
+  jev:
+    provider: typesafe
+    base_url: https://api.typesafe.ai/v1
+    api_key_env: TYPESAFE_API_KEY
+    model: jev-1.13.0
+
+interpret:
+  model: jev
+  questions:
+    category:
+      type: choice
+      instructions: Which category best describes this event?
+      criteria:
+        incident: Something is broken now.
+        noise: Routine activity needing no attention.
+        FYI: Useful information requiring no action.
+    requires_action:
+      type: noul
+      instructions: Does this event genuinely require operator action?
+      criteria:
+        true: Intervention or investigation is warranted.
+        false: No operator action is warranted.
+```
+
+Choice, Noul, and Score questions are sent together in one `POST /systemone` request. Their typed answers are persisted unchanged, including probabilities and per-answer confidence. Policy addresses them with nested paths such as `result.category.choice`, `result.category.confidence`, and `result.requires_action.noul`. Noul has no separate confidence value.
+
+TypeSafe responses are validated against the configured questions before policy can see them. Network failures, `429`, and `5xx` responses retry within three attempts; other client errors fail immediately toward ignore. Pin a Jev version when tuning thresholds: aliases can move. The complete [Jev journal recipe](recipes/homelab-journal/mrmr.typesafe.example.yaml) is shadowed by default.
+
+TypeSafe is an external service. Filters still run first, but every event reaching interpretation is sent to the configured endpoint. Review data sensitivity and retention requirements before using hosted interpretation, especially for email or journal events.
 
 ### Policy and outcomes
 
@@ -184,7 +220,7 @@ default:
   ignore: true
 ```
 
-Conditions support literal equality and operator strings: `>`, `>=`, `<`, `<=`, and `!=`. There is no OR or nested condition language; use separate rules for alternatives.
+Conditions support literal equality and operator strings: `>`, `>=`, `<`, `<=`, and `!=`. Dot-separated paths can traverse nested result objects. There is no OR or nested boolean expression language; use separate rules for alternatives.
 
 | Outcome | Configuration under `then` | Behavior |
 | --- | --- | --- |
@@ -194,7 +230,7 @@ Conditions support literal equality and operator strings: `>`, `>=`, `<`, `<=`, 
 | Emit event | `action: {type: emit, event_type: incident.escalated}` | Re-enter the same pipeline with the decision result as event data |
 | Delegate | `delegate: {agent: triage, prompt: "Investigate this event."}` | POST to `agents.triage.endpoint`; HTTP 2xx means accepted |
 
-Notify messages and HTTP action bodies use Go templates such as `{{ .result.summary }}` and `{{ .event.id }}`. An omitted HTTP action body sends the decision result as a JSON object, without the event-ID prefix used by stdout notifications. Delegation sends `{event_id, decision, prompt}`; the prompt is configured text, not a rendered template. Agent completion does not automatically return as a new event.
+Notify messages and HTTP action bodies use Go templates. They can read nested decisions such as `{{ .result.category.choice }}` and the normalized event through `{{ .event.id }}`, `.type`, `.source`, `.subject`, `.timestamp`, `.data`, `.metadata`, and `.depth`. An omitted HTTP action body sends the decision result as a JSON object, without the event-ID prefix used by stdout notifications. Delegation sends `{event_id, decision, prompt}`; the prompt is configured text, not a rendered template. Agent completion does not automatically return as a new event.
 
 **Start with shadow when testing effects.** Add `shadow: true` beside the outcome in each rule you want suppressed:
 
@@ -317,7 +353,7 @@ For prompt development before real data is available:
 ./mrmr eval -config mrmr.yaml -dataset testdata/generated-eval.jsonl
 ```
 
-Evaluation calls the interpreter and evaluates policy without executing effects or writing runtime events. Recorded event IDs, timestamps, and numeric payloads are preserved; deterministic defaults fill only missing IDs/timestamps in generated fixtures. It does not run pre-model filters. It reports category, requires-action, and outcome accuracy plus the false-ignore rate. Use the generated set as a baseline, then grade at least 50 representative real events against your own acceptance thresholds before trusting a flow.
+Evaluation calls the interpreter and evaluates policy without executing effects or writing runtime events. Recorded event IDs, timestamps, and numeric payloads are preserved; deterministic defaults fill only missing IDs/timestamps in generated fixtures. It does not run pre-model filters. It reports category, requires-action, and outcome accuracy plus the false-ignore rate. TypeSafe evaluation expects a `category` Choice and `requires_action` Noul; the Noul's `0.5` boundary is used only to grade the yes/no label, while configured policy retains its own consequence-appropriate threshold. Use the generated set as a baseline, then grade at least 50 representative real events against your own acceptance thresholds before trusting a flow.
 
 Exports contain complete event payloads. Real evaluation datasets are ignored by Git by default, but inspect and anonymize them before sharing.
 

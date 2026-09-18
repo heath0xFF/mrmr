@@ -414,8 +414,9 @@ policy:
 
 Condition semantics (v0.1):
 
-- All conditions within one `if` are ANDed. There is no OR and no nesting;
-  express alternatives as separate rules.
+- All conditions within one `if` are ANDed. There is no OR or nested boolean
+  expression; express alternatives as separate rules. Dot-separated field
+  paths may traverse structured results (`result.category.choice`).
 - A value is either a literal (equality) or an operator string:
   `"> x"`, ">= x"`, `"< x"`, `"<= x"`, `"!= x"`.
 - Rules evaluate top to bottom; the first match wins. No match falls through
@@ -605,6 +606,12 @@ models:
     base_url: http://marvin:8000/v1
     model: gemma
 
+  jev:
+    provider: typesafe
+    base_url: https://api.typesafe.ai/v1
+    model: jev-1.13.0
+    api_key_env: TYPESAFE_API_KEY
+
   frontier:
     provider: anthropic
     model: claude-sonnet
@@ -614,6 +621,7 @@ Initial model providers:
 
 ```text
 OpenAI-compatible
+TypeSafe System One
 Anthropic
 Ollama
 llama.cpp
@@ -1433,7 +1441,7 @@ v0.1 is Phase 0 plus durability — nothing more:
 
 - POST /api/events (normalized event, persisted)
 - OpenAI-compatible interpreter with schema-constrained decoding and
-  JSON-schema validation
+  JSON-schema validation, plus TypeSafe System One Choice/Noul/Score questions
 - deterministic filters
 - policy evaluation (semantics above)
 - all four outcomes plus shadow, wired to: stdout notify, HTTP action,
@@ -1485,7 +1493,7 @@ POST /events
     ↓
 persist Event
     ↓
-call OpenAI-compatible model
+call configured interpreter
     ↓
 produce structured Decision
     ↓

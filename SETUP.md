@@ -18,7 +18,7 @@ Before changing anything:
 Ask only for missing information:
 
 1. **What should mrmr watch?** Start with a synthetic API event if the source is not decided.
-2. **Which model endpoint and model ID should it use?** Confirm authorization to send data there, particularly for hosted endpoints that incur charges or receive private data.
+2. **Which interpreter should it use?** Confirm an OpenAI-compatible endpoint/model or TypeSafe Jev, and authorization to send data there. Hosted endpoints may incur charges and receive private event content.
 3. **Where should the installation and data live?** Default to a user-owned local directory, not a system-wide installation.
 4. **What should happen when something matters?** Record the eventual goal, but keep effects disabled during setup. Only stdout notifications are built in today; other destinations may require an explicitly configured HTTP integration.
 
@@ -47,8 +47,9 @@ Edit the candidate, not the original example:
 
 - `server.addr`: `127.0.0.1:4242`, or another confirmed-unused loopback port. The example's `:4242` binds all interfaces and is not a safe local default.
 - `db.path`: the **absolute path** to `smoke.db` inside `setup_dir`. YAML does not expand shell variables or `~`; write the resolved path.
-- `models.fast-local`: the approved `base_url`, exact model ID, and `api_key_env` name if needed. Omit `api_key_env` for an unauthenticated endpoint. Never place credentials in a URL or YAML value.
-- Keep `interpret.model: fast-local` and the example prompt/schema for the initial connectivity check, unless the user has explicitly chosen another compatible schema.
+- For OpenAI-compatible inference, set `models.fast-local` to the approved `base_url`, exact model ID, and `api_key_env` name if needed. Omit `api_key_env` only for an unauthenticated endpoint.
+- For TypeSafe, replace the model with `provider: typesafe`, `base_url: https://api.typesafe.ai/v1`, the approved pinned Jev model, and `api_key_env: TYPESAFE_API_KEY` (or the user's approved variable name). Replace `interpret.prompt/schema` with validated Choice/Noul/Score `interpret.questions`; the [Jev journal recipe](recipes/homelab-journal/mrmr.typesafe.example.yaml) shows the complete shape.
+- Never place credentials in a URL or YAML value. Keep the chosen `interpret.model` aligned with its model entry.
 - Remove active sources and agent targets (`sources: []`, `agents: {}`). Pollers run immediately at startup, even in shadow mode.
 - Use `filter: []` so the synthetic event reaches the interpreter.
 - Replace the policy and default with the following **temporary smoke-test policy**:
@@ -58,7 +59,7 @@ policy: []
 default:
   notify:
     via: stdout
-    message: "{{ .result.summary }}"
+    message: "{{ .event.subject }}: {{ .event.data.message }}"
   shadow: true
 ```
 
@@ -96,7 +97,7 @@ curl --silent --show-error --fail-with-body \
 Read the response privately and verify all of these:
 
 - A new `event_id` exists and `duplicate` is absent or false.
-- `decision.status` is `ok`, with fields matching the configured schema.
+- `decision.status` is `ok`, with fields matching the configured OpenAI schema or TypeSafe questions.
 - `outcome` is `notify` under the temporary policy.
 - The trace shows persistence, interpretation, default policy selection, and a **shadow** outcome.
 
@@ -132,7 +133,7 @@ Stop the owned process with SIGINT, restart it with the same config/database, an
 
 - **Config rejected:** fix the named supported field in the candidate. Do not weaken validation or copy unimplemented keys from the roadmap.
 - **Bind failure:** identify the existing listener; choose another loopback port rather than killing it.
-- **Connection refused or HTTP 404:** check the approved endpoint, port, model API base path, and model ID. Include `/v1` when required by that server.
+- **Connection refused or HTTP 404:** check the approved endpoint, port, model API base path, provider, and model ID. Include `/v1` when required; TypeSafe uses `https://api.typesafe.ai/v1` and mrmr appends `/systemone`.
 - **HTTP 401/403:** ask the user to correct credential provisioning. Check presence without printing the value.
 - **Invalid/errored decision:** report the model check as failed. Inspect schema compatibility and endpoint availability; do not count fallback-to-ignore as success or enable effects to diagnose it.
 - **Missing persisted records or failed restart:** stop promotion and investigate storage permissions/path and runtime errors. Never delete the database to make verification pass.

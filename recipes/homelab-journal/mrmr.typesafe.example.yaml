@@ -1,0 +1,66 @@
+# Linux system-journal dogfood configuration using TypeSafe Jev.
+# Jev is hosted: selected journal event content leaves this machine.
+# Keep shadow enabled until at least 50 representative real events are labeled.
+server:
+  addr: 127.0.0.1:4242
+
+db:
+  path: mrmr-journal-jev.db
+
+models:
+  jev:
+    provider: typesafe
+    base_url: https://api.typesafe.ai/v1
+    api_key_env: TYPESAFE_API_KEY
+    # Pin thresholds to a model version; move versions only after re-evaluation.
+    model: jev-1.13.0
+
+sources:
+  - name: system-services
+    type: systemd-journal
+    units: [plexmediaserver.service, lfm25.service]
+    priority: warning
+    every: 30s
+    event_type: system.service.warning
+
+interpret:
+  model: jev
+  # Jev evaluates these independent questions together in one request. Keep
+  # arithmetic, journal priority filtering, and execution authority in mrmr.
+  questions:
+    category:
+      type: choice
+      instructions: Which category best describes this system service journal event?
+      criteria:
+        incident: A service is broken, unavailable, repeatedly failing, or losing data now.
+        noise: Routine startup, shutdown, retry, or warning chatter that needs no operator attention.
+        FYI: Useful operational information that is neither an incident nor routine noise.
+
+    requires_action:
+      type: noul
+      instructions: Does this event indicate that the home-server operator genuinely needs to take action?
+      criteria:
+        true: Intervention or investigation by the operator is warranted.
+        false: No operator action is warranted from this event alone.
+
+    severity:
+      type: score
+      instructions: How severe is the operational impact described by this event?
+      criteria:
+        - No meaningful service impact.
+        - A service is degraded, but a workaround or automatic recovery exists.
+        - A service is unavailable or data is at risk, with no stated workaround.
+
+policy:
+  - if:
+      result.category.choice: incident
+      result.category.confidence: ">= 0.85"
+      result.requires_action.noul: ">= 0.85"
+    then:
+      notify:
+        via: stdout
+        message: "{{ .event.subject }}: {{ .event.data.message }}"
+      shadow: true
+
+default:
+  ignore: true

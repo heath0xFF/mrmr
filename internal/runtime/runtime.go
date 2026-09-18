@@ -31,14 +31,15 @@ import (
 // the config that built it is the config it runs, which is what lets
 // in-flight events finish under the rules they started with.
 type Runtime struct {
-	DB       *storage.DB
-	Client   *model.Client
-	ModelCfg model.Config
-	ModelKey string // name in config, recorded on decisions
-	Prompt   string
-	Schema   model.Schema
-	Policy   policy.Policy
-	Filters  filter.List
+	DB        *storage.DB
+	Client    *model.Client
+	ModelCfg  model.Config
+	ModelKey  string // name in config, recorded on decisions
+	Prompt    string
+	Schema    model.Schema
+	Questions model.Questions
+	Policy    policy.Policy
+	Filters   filter.List
 	// AgentEndpoints maps a policy delegate.agent name to its HTTP endpoint.
 	// Resolved at startup from config so policy rules never carry URLs.
 	AgentEndpoints map[string]string
@@ -154,7 +155,7 @@ func (r *Runtime) ingest(ctx context.Context, e event.Event, t *[]TraceStep) (*R
 	dec := &event.Decision{ID: event.NewID("dec_"), EventID: e.ID, Interpreter: r.ModelKey, Model: r.ModelCfg.Model}
 
 	eventJSON, _ := json.Marshal(e)
-	result, latency, modelID, err := r.Client.Interpret(ctx, r.ModelCfg, r.ModelKey, r.Prompt, r.Schema, eventJSON)
+	result, latency, modelID, err := r.Client.InterpretWithQuestions(ctx, r.ModelCfg, r.ModelKey, r.Prompt, r.Schema, r.Questions, eventJSON)
 	dec.Model = modelID
 	dec.LatencyMs = latency
 
@@ -260,7 +261,7 @@ func (r *Runtime) execute(ctx context.Context, t policy.Then, dec *event.Decisio
 		if t.Notify.Via != "stdout" {
 			return fmt.Sprintf("unsupported notify via %q", t.Notify.Via) // config validation should prevent this
 		}
-		fmt.Println(renderMessage(t.Notify.Message, dec))
+		fmt.Println(renderMessage(t.Notify.Message, dec, parent))
 		return ""
 
 	case t.Action != nil:
@@ -281,7 +282,7 @@ func (r *Runtime) execute(ctx context.Context, t policy.Then, dec *event.Decisio
 				}
 				body = string(payload)
 			} else {
-				body = renderMessage(t.Action.Body, dec)
+				body = renderMessage(t.Action.Body, dec, parent)
 			}
 			return r.do(ctx, method, t.Action.URL, body)
 		case "emit":
@@ -362,7 +363,7 @@ func (r *Runtime) httpClient() *http.Client {
 // is still useful. Template errors degrade to a bracketed note rather than
 // dropping the notification — a notification with a hint of what went wrong
 // beats silence.
-func renderMessage(tmpl string, dec *event.Decision) string {
+func renderMessage(tmpl string, dec *event.Decision, e event.Event) string {
 	if tmpl == "" {
 		b, _ := json.Marshal(dec.Result)
 		return fmt.Sprintf("[%s] %s", dec.EventID, b)
@@ -371,8 +372,16 @@ func renderMessage(tmpl string, dec *event.Decision) string {
 	if err != nil {
 		return fmt.Sprintf("[%s] (bad notify template: %v)", dec.EventID, err)
 	}
+	// Use lower-case map keys so templates follow the JSON/YAML vocabulary,
+	// not Go field names. Supplying the whole normalized Event lets
+	// non-generative interpreters produce useful notifications without
+	// copying source text into their Decision.
+	eventData := map[string]any{
+		"id": e.ID, "type": e.Type, "source": e.Source, "subject": e.Subject,
+		"timestamp": e.Timestamp, "data": e.Data, "metadata": e.Metadata, "depth": e.Depth,
+	}
 	var sb strings.Builder
-	if err := t.Execute(&sb, map[string]any{"result": dec.Result, "event": map[string]any{"id": dec.EventID}}); err != nil {
+	if err := t.Execute(&sb, map[string]any{"result": dec.Result, "event": eventData}); err != nil {
 		return fmt.Sprintf("[%s] (template error: %v)", dec.EventID, err)
 	}
 	return sb.String()
