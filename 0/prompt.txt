@@ -1,0 +1,10 @@
+i get these warnings when i boot up pi: 
+
+[Skill conflicts]
+  "typesafe-ai" collision:
+    ✓ auto (project) ~/code/mrmr/.pi/skills/typesafe-ai/SKILL.md
+    ✗ ~/.agents/skills/typesafe-ai/SKILL.md (skipped)
+  auto (user) ~/.agents/skills/orchestration/SKILL.md
+    description exceeds 1024 characters (1038)    
+
+can you investigate, and also make sure that the orca orchestration skill as well as all my other skills are up to date?

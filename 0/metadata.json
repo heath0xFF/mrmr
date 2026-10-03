@@ -1,0 +1,58 @@
+{
+  "cli_version": "0.10.5",
+  "checkpoint_id": "01M41ANQ9JVE8EF09D1P8FAVJ0",
+  "session_id": "01a0efc8-51a9-755f-95ea-b6e8afeb5e67",
+  "strategy": "manual-commit",
+  "created_at": "2026-10-03T16:48:35.621398Z",
+  "branch": "main",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [
+    ".agents/skills/typesafe-ai/LICENSE",
+    ".agents/skills/typesafe-ai/SKILL.md"
+  ],
+  "agent": "Pi",
+  "model": "gpt-6-astra",
+  "turn_id": "5022b76cb5ee",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 331311,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 16446464,
+    "output_tokens": 44776,
+    "api_call_count": 113
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-10-03T16:48:35.469235Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 170,
+    "total_committed": 170,
+    "total_lines_changed": 170,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 507,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.json": 90,
+        ".codex/hooks.json": 88,
+        ".firecrawl/search-nvidia-switchyard.json": 1,
+        ".pi/extensions/entire/index.ts": 147,
+        ".pi/skills/typesafe-ai/LICENSE": 21,
+        ".pi/skills/typesafe-ai/SKILL.md": 149,
+        "skills-lock.json": 11
+      }
+    }
+  ]
+}
