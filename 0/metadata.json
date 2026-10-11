@@ -1,0 +1,209 @@
+{
+  "cli_version": "0.11.4",
+  "checkpoint_id": "01M4P6C4BRXSSVA2SBFNHCYS01",
+  "session_id": "01a1176a-b270-71a6-9831-6ddb30a921d0",
+  "strategy": "manual-commit",
+  "created_at": "2026-10-11T19:17:29.379524Z",
+  "branch": "main",
+  "checkpoints_count": 10,
+  "save_step_count": 10,
+  "files_touched": [
+    "README.md",
+    "cmd/mrmr/main.go",
+    "go.mod",
+    "go.sum",
+    "internal/config/config_test.go",
+    "recipes/local-d1/README.md",
+    "recipes/local-d1/RESULTS.md",
+    "recipes/local-d1/benchmark.py",
+    "recipes/local-d1/mrmr.example.yaml",
+    "recipes/local-d1/requirements.lock",
+    "recipes/local-d1/serve.py",
+    "recipes/local-d1/smoke.py",
+    "recipes/local-d1/test_serve.py"
+  ],
+  "agent": "Pi",
+  "model": "gpt-6-astra",
+  "turn_id": "a24dcb496d0e",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 294360,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 7729792,
+    "output_tokens": 35366,
+    "api_call_count": 74
+  },
+  "session_metrics": {
+    "turn_count": 10
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-10-11T19:17:29.356415Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 2,
+    "human_removed": 1044,
+    "total_committed": 950,
+    "total_lines_changed": 1046,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 4409,
+      "user_lines_removed": 2,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".agents/skills/typesafe-ai/LICENSE": 21,
+        ".agents/skills/typesafe-ai/SKILL.md": 149,
+        ".claude/settings.json": 90,
+        ".codex/hooks.json": 88,
+        ".firecrawl/liquid-decision-guide.md": 686,
+        ".firecrawl/liquid-decision-models.md": 777,
+        ".firecrawl/liquid-index.md": 65,
+        ".firecrawl/liquid-model-library.md": 236,
+        ".firecrawl/search-nvidia-switchyard.json": 1,
+        ".firecrawl/search-superhuman-mcp.json": 1,
+        ".firecrawl/superhuman-mcp-help.md": 651,
+        ".firecrawl/superhuman-mcp-launch.md": 140,
+        ".firecrawl/typesafe-index.md": 115,
+        ".pi/extensions/entire/index.ts": 147,
+        ".pi/settings.json": 5,
+        "README.md": 55,
+        "cmd/mrmr/auth.go": 68,
+        "cmd/mrmr/auth_test.go": 32,
+        "cmd/mrmr/main.go": 6,
+        "go.mod": 9,
+        "go.sum": 24,
+        "internal/superhuman/client.go": 180,
+        "internal/superhuman/login.go": 148,
+        "internal/superhuman/store.go": 201,
+        "internal/superhuman/store_test.go": 246,
+        "internal/superhuman/superhuman_test.go": 257,
+        "skills-lock.json": 11
+      },
+      "user_removed_per_file": {
+        "cmd/mrmr/main.go": 2
+      }
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 330,
+      "user_lines_removed": 0,
+      "agent_lines_added": 4079,
+      "agent_lines_removed": 2,
+      "user_added_per_file": {
+        ".claude/settings.json": 90,
+        ".codex/hooks.json": 88,
+        ".pi/extensions/entire/index.ts": 147,
+        ".pi/settings.json": 5
+      }
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 330,
+      "user_lines_removed": 0,
+      "agent_lines_added": 4079,
+      "agent_lines_removed": 2,
+      "user_added_per_file": {
+        ".claude/settings.json": 90,
+        ".codex/hooks.json": 88,
+        ".pi/extensions/entire/index.ts": 147,
+        ".pi/settings.json": 5
+      }
+    },
+    {
+      "checkpoint_number": 4,
+      "user_lines_added": 330,
+      "user_lines_removed": 0,
+      "agent_lines_added": 4079,
+      "agent_lines_removed": 2,
+      "user_added_per_file": {
+        ".claude/settings.json": 90,
+        ".codex/hooks.json": 88,
+        ".pi/extensions/entire/index.ts": 147,
+        ".pi/settings.json": 5
+      }
+    },
+    {
+      "checkpoint_number": 5,
+      "user_lines_added": 330,
+      "user_lines_removed": 0,
+      "agent_lines_added": 4079,
+      "agent_lines_removed": 2,
+      "user_added_per_file": {
+        ".claude/settings.json": 90,
+        ".codex/hooks.json": 88,
+        ".pi/extensions/entire/index.ts": 147,
+        ".pi/settings.json": 5
+      }
+    },
+    {
+      "checkpoint_number": 6,
+      "user_lines_added": 330,
+      "user_lines_removed": 0,
+      "agent_lines_added": 5026,
+      "agent_lines_removed": 2,
+      "user_added_per_file": {
+        ".claude/settings.json": 90,
+        ".codex/hooks.json": 88,
+        ".pi/extensions/entire/index.ts": 147,
+        ".pi/settings.json": 5
+      }
+    },
+    {
+      "checkpoint_number": 7,
+      "user_lines_added": 330,
+      "user_lines_removed": 0,
+      "agent_lines_added": 5026,
+      "agent_lines_removed": 2,
+      "user_added_per_file": {
+        ".claude/settings.json": 90,
+        ".codex/hooks.json": 88,
+        ".pi/extensions/entire/index.ts": 147,
+        ".pi/settings.json": 5
+      }
+    },
+    {
+      "checkpoint_number": 8,
+      "user_lines_added": 330,
+      "user_lines_removed": 0,
+      "agent_lines_added": 5026,
+      "agent_lines_removed": 2,
+      "user_added_per_file": {
+        ".claude/settings.json": 90,
+        ".codex/hooks.json": 88,
+        ".pi/extensions/entire/index.ts": 147,
+        ".pi/settings.json": 5
+      }
+    },
+    {
+      "checkpoint_number": 9,
+      "user_lines_added": 330,
+      "user_lines_removed": 0,
+      "agent_lines_added": 5026,
+      "agent_lines_removed": 2,
+      "user_added_per_file": {
+        ".claude/settings.json": 90,
+        ".codex/hooks.json": 88,
+        ".pi/extensions/entire/index.ts": 147,
+        ".pi/settings.json": 5
+      }
+    },
+    {
+      "checkpoint_number": 10,
+      "user_lines_added": 330,
+      "user_lines_removed": 0,
+      "agent_lines_added": 5026,
+      "agent_lines_removed": 2,
+      "user_added_per_file": {
+        ".claude/settings.json": 90,
+        ".codex/hooks.json": 88,
+        ".pi/extensions/entire/index.ts": 147,
+        ".pi/settings.json": 5
+      }
+    }
+  ]
+}

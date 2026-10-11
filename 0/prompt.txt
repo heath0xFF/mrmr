@@ -1,0 +1,43 @@
+ok so check this out: https://t.co/3iSPY67UXL
+
+it's liquid ai's open-d1, a decision model. we already built support for jev, but i think this model should be the default. 
+
+read through it, tell me what you think
+
+---
+
+yep agree with your assessment.
+
+---
+
+yep agree with your recommendatin.
+
+---
+
+what's the recommendation here? i would think we run it on marvin, because that's what this intended project is supposed to be run on. 
+
+but later on support system one inference on whatever backend
+
+---
+
+ok hell yeah let's go!
+
+---
+
+why run int8?
+
+---
+
+_damn_ that's rough. maybe marvin itself isn't the best machine to run _inference_ on. and just runs the mrmr service and inference is run somewhere else?
+
+---
+
+ok is mrmr set up to have inference run on a different machine?
+
+---
+
+ok were things cleaned up on marvin after this test?
+
+---
+
+yeah remove it pls
