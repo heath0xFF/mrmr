@@ -7,8 +7,10 @@ package config
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"math"
+	"net/url"
 	"os"
 	"regexp"
 	"strings"
@@ -16,6 +18,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/heath0xff/mrmr/internal/agent"
 	"github.com/heath0xff/mrmr/internal/filter"
 	"github.com/heath0xff/mrmr/internal/model"
 	"github.com/heath0xff/mrmr/internal/policy"
@@ -29,12 +32,7 @@ type DB struct {
 	Path string `yaml:"path"`
 }
 
-type Interpret struct {
-	Model     string          `yaml:"model"`
-	Prompt    string          `yaml:"prompt"`
-	Schema    model.Schema    `yaml:"schema"`
-	Questions model.Questions `yaml:"questions"`
-}
+type Interpret = model.Interpretation
 
 // Source configures a built-in pull adapter. Common fields name its events
 // and schedule; adapter-specific fields are rejected on the wrong type so
@@ -55,6 +53,10 @@ type Source struct {
 	Priority       string        `yaml:"priority"` // systemd-journal: this severity or higher
 }
 
+// A destination secret must be a literal environment reference, not a URL
+// or model template that could change the adapter's authority.
+var environmentName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
 // Exact names only: no patterns, journalctl options, paths, or user-unit
 // selectors. This intentionally accepts a conservative subset of systemd
 // names; escaped unit names can be added when a real source needs them.
@@ -72,12 +74,7 @@ func JournalPriority(name string) (int, bool) {
 	return 0, false
 }
 
-// Agent is a delegation target. v0.1 ships only the generic HTTP adapter,
-// so there is no type field yet: every agent is an HTTP endpoint that
-// receives {event_id, decision, prompt} and returns 2xx.
-type Agent struct {
-	Endpoint string `yaml:"endpoint"`
-}
+type Agent = agent.Config
 
 type Config struct {
 	Server Server `yaml:"server"`
@@ -86,9 +83,10 @@ type Config struct {
 	// deterministic checks that run before any model call. An event
 	// that fails any Spec is recorded and ignored before
 	// interpretation.
-	Filter    filter.List             `yaml:"filter"`
-	Models    map[string]model.Config `yaml:"models"`
-	Interpret Interpret               `yaml:"interpret"`
+	Filter          filter.List             `yaml:"filter"`
+	Models          map[string]model.Config `yaml:"models"`
+	Interpret       Interpret               `yaml:"interpret"`
+	InterpretByType map[string]Interpret    `yaml:"interpret_by_type"`
 	// Policy is inlined so the YAML reads exactly like IMPLEMENTATION.md:
 	// a top-level `policy:` list plus a sibling `default:`.
 	Policy policy.Policy `yaml:"policy,inline"`
@@ -130,7 +128,16 @@ func Load(path string) (*Config, error) {
 	return &c, nil
 }
 
-func (c *Config) Validate() error {
+// InterpreterFor selects an exact event-type override; there are no patterns,
+// branching workflows, or model-controlled routing decisions here.
+func (c *Config) InterpreterFor(eventType string) Interpret {
+	if spec, ok := c.InterpretByType[eventType]; ok {
+		return spec
+	}
+	return c.Interpret
+}
+
+func (c *Config) validateInterpretation() error {
 	if c.Interpret.Model == "" {
 		return fmt.Errorf("config: interpret.model is required")
 	}
@@ -138,19 +145,25 @@ func (c *Config) Validate() error {
 	if !ok {
 		return fmt.Errorf("config: interpret.model %q not defined in models", c.Interpret.Model)
 	}
+	if mc.Role == "agent" {
+		return fmt.Errorf("config: interpret.model must have decision role, not agent")
+	}
 	if mc.BaseURL == "" {
 		return fmt.Errorf("config: model %q: base_url is required", c.Interpret.Model)
 	}
 	switch mc.Provider {
 	case "openai-compatible":
+		if len(c.Interpret.Questions) != 0 {
+			if c.Interpret.Prompt != "" || len(c.Interpret.Schema) != 0 {
+				return fmt.Errorf("config: questions cannot be mixed with prompt/schema")
+			}
+			return model.ValidateQuestions(c.Interpret.Questions)
+		}
 		if c.Interpret.Prompt == "" {
 			return fmt.Errorf("config: interpret.prompt is required for openai-compatible models")
 		}
 		if len(c.Interpret.Schema) == 0 {
 			return fmt.Errorf("config: interpret.schema is required for openai-compatible models")
-		}
-		if len(c.Interpret.Questions) != 0 {
-			return fmt.Errorf("config: interpret.questions requires a typesafe model")
 		}
 		for name, f := range c.Interpret.Schema {
 			switch f.Type {
@@ -169,18 +182,48 @@ func (c *Config) Validate() error {
 				return fmt.Errorf("config: schema field %q: minimum must not exceed maximum", name)
 			}
 		}
-	case "typesafe":
-		if mc.APIKeyEnv == "" {
+	case "typesafe", "system-one", "liquid-d1":
+		if mc.Provider == "typesafe" && mc.APIKeyEnv == "" {
 			return fmt.Errorf("config: model %q: api_key_env is required for typesafe", c.Interpret.Model)
 		}
 		if c.Interpret.Prompt != "" || len(c.Interpret.Schema) != 0 {
-			return fmt.Errorf("config: interpret.prompt/schema are not supported for typesafe; use questions")
+			return fmt.Errorf("config: interpret.prompt/schema are not supported for System One providers; use questions")
 		}
 		if err := model.ValidateQuestions(c.Interpret.Questions); err != nil {
 			return fmt.Errorf("config: interpret.questions: %w", err)
 		}
 	default:
-		return fmt.Errorf("config: model %q: unsupported provider %q (openai-compatible, typesafe)", c.Interpret.Model, mc.Provider)
+		return fmt.Errorf("config: model %q: unsupported provider %q (openai-compatible, typesafe, system-one, liquid-d1)", c.Interpret.Model, mc.Provider)
+	}
+	return nil
+}
+
+func (c *Config) Validate() error {
+	for name, mc := range c.Models {
+		if mc.Role != "" && mc.Role != "decision" && mc.Role != "agent" {
+			return fmt.Errorf("config: model %q: role must be decision or agent", name)
+		}
+		if mc.Role == "agent" && mc.Provider != "openai-compatible" {
+			return fmt.Errorf("config: agent model %q requires openai-compatible provider", name)
+		}
+		if mc.Role == "agent" {
+			if err := staticHTTPURL(mc.BaseURL); err != nil || mc.Model == "" {
+				return fmt.Errorf("config: agent model %q requires model and static HTTP base_url", name)
+			}
+		}
+	}
+	if err := c.validateInterpretation(); err != nil {
+		return err
+	}
+	for typ, spec := range c.InterpretByType {
+		if strings.TrimSpace(typ) == "" {
+			return fmt.Errorf("config: interpret_by_type requires nonempty event types")
+		}
+		candidate := *c
+		candidate.Interpret = spec
+		if err := candidate.validateInterpretation(); err != nil {
+			return fmt.Errorf("config: interpret_by_type %q: %w", typ, err)
+		}
 	}
 	for i, f := range c.Filter {
 		if err := f.Validate(); err != nil {
@@ -202,14 +245,28 @@ func (c *Config) Validate() error {
 		if set > 1 {
 			return fmt.Errorf("config: %s: set at most one of notify, action, delegate, ignore", where)
 		}
-		if t.Notify != nil && t.Notify.Via != "stdout" {
-			return fmt.Errorf("config: %s: notify.via %q not supported (v0.1: stdout)", where, t.Notify.Via)
+		if t.Notify != nil {
+			switch t.Notify.Via {
+			case "stdout":
+				if t.Notify.WebhookEnv != "" {
+					return fmt.Errorf("config: %s: webhook_env requires notify.via discord", where)
+				}
+			case "discord":
+				if !environmentName.MatchString(t.Notify.WebhookEnv) {
+					return fmt.Errorf("config: %s: discord requires a literal webhook_env variable name", where)
+				}
+			default:
+				return fmt.Errorf("config: %s: notify.via %q not supported (stdout, discord)", where, t.Notify.Via)
+			}
 		}
 		if t.Action != nil {
 			switch t.Action.Type {
 			case "http":
 				if t.Action.URL == "" {
 					return fmt.Errorf("config: %s: action.url is required for type http", where)
+				}
+				if err := staticHTTPURL(t.Action.URL); err != nil {
+					return fmt.Errorf("config: %s: action.url: %w", where, err)
 				}
 			case "emit":
 				if t.Action.EventType == "" {
@@ -220,6 +277,12 @@ func (c *Config) Validate() error {
 			}
 		}
 		if t.Delegate != nil {
+			if t.Delegate.CompletionEventType != "" && !t.Delegate.EmitCompletion {
+				return fmt.Errorf("config: %s: completion_event_type requires emit_completion", where)
+			}
+			if strings.ContainsAny(t.Delegate.CompletionEventType, "{} \t\r\n") {
+				return fmt.Errorf("config: %s: completion_event_type must be a literal event type", where)
+			}
 			if t.Delegate.Agent == "" {
 				return fmt.Errorf("config: %s: delegate.agent is required", where)
 			}
@@ -236,8 +299,25 @@ func (c *Config) Validate() error {
 		return nil
 	}
 	for name, a := range c.Agents {
+		if a.Timeout != 0 && (a.Timeout < time.Second || a.Timeout > 5*time.Minute) {
+			return fmt.Errorf("config: agent %q: timeout must be between 1s and 5m", name)
+		}
 		if a.Endpoint == "" {
 			return fmt.Errorf("config: agent %q: endpoint is required", name)
+		}
+		if err := staticHTTPURL(a.Endpoint); err != nil {
+			return fmt.Errorf("config: agent %q: %w", name, err)
+		}
+		if a.Model != "" {
+			mc, ok := c.Models[a.Model]
+			if !ok || mc.Role != "agent" {
+				return fmt.Errorf("config: agent %q: model must reference a role: agent model", name)
+			}
+		}
+		for _, capability := range a.Capabilities {
+			if strings.TrimSpace(capability) == "" || strings.ContainsAny(capability, "{}\r\n") {
+				return fmt.Errorf("config: agent %q: capabilities must be literal nonempty names", name)
+			}
 		}
 	}
 	seenSources := map[string]bool{}
@@ -297,5 +377,19 @@ func (c *Config) Validate() error {
 			return err
 		}
 	}
+	// Policy identity must be stable and serializable before executions can
+	// reference it; YAML-only map keys or non-finite values would lose identity.
+	if _, err := json.Marshal(c.Policy); err != nil {
+		return fmt.Errorf("config: policy must be JSON-compatible: %w", err)
+	}
 	return validateThen(c.Policy.Default, "default")
+}
+
+// Effect destinations are fixed configuration, never templates or credentials.
+func staticHTTPURL(value string) error {
+	u, err := url.Parse(value)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.Fragment != "" || strings.ContainsAny(value, "{}") {
+		return fmt.Errorf("must be a static HTTP(S) URL without credentials or fragment")
+	}
+	return nil
 }

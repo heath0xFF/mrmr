@@ -33,7 +33,20 @@ type Event struct {
 	// (emit-event actions, delegated-agent completions). Externally sourced
 	// events are 0; each emit increments. The runtime forces ignore past its
 	// max so a flow pair that emits into each other cannot recurse forever.
-	Depth int `json:"depth,omitempty"`
+	Depth      int         `json:"depth,omitempty"`
+	Provenance *Provenance `json:"provenance,omitempty"`
+}
+
+// Provenance is runtime-owned lineage, not agent-supplied metadata. References
+// avoid copying ancestor payloads into each completion in a causal chain.
+type Provenance struct {
+	ParentEventID string `json:"parent_event_id"`
+	OriginEventID string `json:"origin_event_id"`
+	DecisionID    string `json:"decision_id"`
+	ExecutionID   string `json:"execution_id"`
+	PolicyRule    string `json:"policy_rule"`
+	PolicyHash    string `json:"policy_hash"`
+	Agent         string `json:"agent,omitempty"`
 }
 
 // Decision is the validated result of interpreting an Event. Status is the

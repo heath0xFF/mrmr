@@ -15,18 +15,6 @@ import (
 	"time"
 )
 
-// Questions is the configured set of independent System One judgments. The
-// criteria shape follows TypeSafe's API: a map for Choice/Noul and a list for
-// Score. It remains any at the YAML boundary because those wire shapes differ;
-// ValidateQuestions normalizes and rejects every other shape before startup.
-type Questions map[string]Question
-
-type Question struct {
-	Type         string `yaml:"type"`
-	Instructions string `yaml:"instructions"`
-	Criteria     any    `yaml:"criteria"`
-}
-
 // ValidateQuestions validates the public YAML contract and, importantly,
 // reserves dots for policy traversal. A question or option containing a dot
 // would make result.category.choice ambiguous at policy time.
@@ -80,7 +68,8 @@ func normalizeQuestion(q Question) (systemOneQuestion, error) {
 			}
 		}
 		out.Criteria = criteria
-	case "noul":
+	case "noul", "yes_no":
+		out.Type = "noul"
 		if q.Criteria == nil {
 			return out, nil
 		}
@@ -101,7 +90,7 @@ func normalizeQuestion(q Question) (systemOneQuestion, error) {
 		}
 		out.Criteria = criteria
 	default:
-		return out, fmt.Errorf("unsupported type %q (choice, noul, score)", q.Type)
+		return out, fmt.Errorf("unsupported type %q (choice, yes_no, noul, score)", q.Type)
 	}
 	return out, nil
 }

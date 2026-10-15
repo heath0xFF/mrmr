@@ -18,9 +18,9 @@ Before changing anything:
 Ask only for missing information:
 
 1. **What should mrmr watch?** Start with a synthetic API event if the source is not decided.
-2. **Which interpreter should it use?** Confirm an OpenAI-compatible endpoint/model or TypeSafe Jev, and authorization to send data there. Hosted endpoints may incur charges and receive private event content.
+2. **Which decision model should it use?** Confirm an OpenAI-compatible endpoint/model, TypeSafe Jev, or a verified local System One/d1 endpoint, and authorization to send data there. Use `role: decision`; hosted endpoints may incur charges and receive private event content. A worker model is a separate `role: agent` endpoint hint for an external agent harness.
 3. **Where should the installation and data live?** Default to a user-owned local directory, not a system-wide installation.
-4. **What should happen when something matters?** Record the eventual goal, but keep effects disabled during setup. Only stdout notifications are built in today; other destinations may require an explicitly configured HTTP integration.
+4. **What should happen when something matters?** Record the eventual goal, but keep effects disabled during setup. Stdout and Discord notifications are built in. Discord uses a private environment-variable reference for its webhook; never put the URL in YAML or Git.
 
 If credentials are needed, ask the user to supply them through their environment or approved secret store, not chat. Record only the environment variable name and whether it is set. mrmr does not automatically load `.env` files.
 
@@ -49,6 +49,8 @@ Edit the candidate, not the original example:
 - `db.path`: the **absolute path** to `smoke.db` inside `setup_dir`. YAML does not expand shell variables or `~`; write the resolved path.
 - For OpenAI-compatible inference, set `models.fast-local` to the approved `base_url`, exact model ID, and `api_key_env` name if needed. Omit `api_key_env` only for an unauthenticated endpoint.
 - For TypeSafe, replace the model with `provider: typesafe`, `base_url: https://api.typesafe.ai/v1`, the approved pinned Jev model, and `api_key_env: TYPESAFE_API_KEY` (or the user's approved variable name). Replace `interpret.prompt/schema` with validated Choice/Noul/Score `interpret.questions`; the [Jev journal recipe](recipes/homelab-journal/mrmr.typesafe.example.yaml) shows the complete shape.
+- For local d1, use `provider: liquid-d1` with the [local serving recipe](recipes/local-d1/README.md) and its exact pinned model ID. This uses System One, not a presumed Liquid-hosted API. `system-one` is the generic compatible selector.
+- For portable decision questions, OpenAI-compatible models also accept Choice/Yes-No/Score `interpret.questions`. Do not mix them with prompt/schema. This generated path has no probabilities or confidence; confidence-gated rules will not match.
 - Never place credentials in a URL or YAML value. Keep the chosen `interpret.model` aligned with its model entry.
 - Remove active sources and agent targets (`sources: []`, `agents: {}`). Pollers run immediately at startup, even in shadow mode.
 - Use `filter: []` so the synthetic event reaches the interpreter.
@@ -152,11 +154,31 @@ After the smoke test passes, prepare the intended installation in the agreed dir
 
 For an HTTP JSON source, follow the [polling configuration](README.md#http-polling). Confirm the record array path, stable ID field, and sample payload shape without exposing private records. IDs are dedup keys; changing a record without changing its ID does not emit an update. Failed or malformed records hold the watermark for retry; permanently malformed records require correcting the source. Cursor ordering/pagination is limited, and already-persisted partial processing has no recovery replay: do not promise lossless synchronization.
 
-For Linux system-journal ingestion, use the [built-in source and shadow example](README.md#linux-system-journal), not a forwarding script or second service. Confirm the exact system-unit allowlist and severity. Check journal access as the service account; ask before changing group membership, and never run mrmr as root as a workaround. Startup begins at the current tail without backfill, so final verification needs a new authorized record after activation. User journals (including a Hermes user service) are not supported in this slice. A missing/vacuumed checkpoint is a blocker, not permission to silently reset history.
+For Linux system-journal ingestion, use the [built-in source and shadow example](README.md#linux-system-journal), not a forwarding script or second service. Confirm the exact system-unit allowlist and severity. Check journal access as the service account; ask before changing group membership, and never run mrmr as root as a workaround. Startup begins at the current tail without backfill, so final verification needs a new authorized record after activation. User services (including a Hermes user service) are not supported in this slice. System services running under a regular UID are supported even when journald stores their messages in per-user journal files; verify this with a canary under the same service account. A missing/vacuumed checkpoint is a blocker, not permission to silently reset history.
 
 For API ingestion, the caller must send normalized events and supply stable `metadata.source_event_id` values. mrmr does not verify provider webhook signatures on their behalf.
 
 Once the user has approved the final configuration and data access, start it temporarily and verify a representative authorized event reaches the intended filter/interpreter/policy path, remains shadowed (or ignored), and is inspectable in the final database. For a poller, verify its first fetch and a repeated poll without duplicate interpretation. If no representative event is available, report source verification as pending rather than claiming it works.
+
+### Optional ambient investigation setup
+
+Use [recipes/homelab-ambient](recipes/homelab-ambient/README.md) only if delegated
+investigation is in scope. Do not install or activate an agent implicitly.
+
+- Keep judge and worker roles separate. mrmr sends the configured worker hint to
+  an external HTTP task endpoint; it does not host a tool loop or forward API keys.
+- Confirm that the harness enforces read-only credentials and a fixed capability
+  allowlist. `read_only`/`capabilities` in the request are contract hints, not a sandbox.
+- Keep `emit_completion` off unless the endpoint returns structured terminal JSON
+  within the configured request deadline (10s by default, at most 5m). HTTP 202 remains valid only in acceptance
+  mode; asynchronous callbacks are not implemented.
+- For opt-in re-entry, validate the `interpret_by_type` follow-up questions, shared
+  filters, and event-type/depth policy gates. Keep all effects shadowed initially.
+- A shadow delegation emits no completion. After explicit approval to enable only
+  read-only delegation, verify `mrmr inspect` shows the execution, child event ID,
+  child depth/lineage, follow-up Decision, and shadowed or ignored final outcome.
+- Do not test a real remediation to prove the loop. Recommendations remain data;
+  the runtime must map them to static configured effects after separate approval.
 
 ## 5. Ask before activation or persistence
 
@@ -181,6 +203,6 @@ Provide a concise report with no secrets or private event payloads:
 - **Commands:** exact start, stop, inspect, and restart commands for this installation. State that config changes require restart.
 - **Verified:** build/tests, real model decision status, stored trace and shadow execution, duplicate suppression before/after restart, and final source verification (or explicitly pending).
 - **Not verified / blockers:** unsupported integrations, credentials not provisioned, source not yet connected, or approval still required.
-- **Next quality gate:** collect and label at least 50 representative real events and measure accuracy/false-ignore rate using the [evaluation workflow](README.md#inspect-label-and-evaluate). Agree acceptance thresholds with the user. Generated examples and this smoke test do not satisfy that gate; evaluation currently targets ignore/notify and skips pre-model filters.
+- **Next quality gate:** collect and label at least 50 representative real events and measure accuracy/false-ignore rate using the [evaluation workflow](README.md#inspect-label-and-evaluate). Agree acceptance thresholds with the user. Generated examples and this smoke test do not satisfy that gate; evaluation grades all four intended outcomes and skips pre-model filters; it never invokes workers or effects.
 
 Never summarize a successful synthetic check as “production ready.” The runtime still lacks crash-recovery replay, lossless polling, and a permission/approval layer. Make those limits visible before the user trusts unattended effects.

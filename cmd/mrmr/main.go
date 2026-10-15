@@ -36,11 +36,15 @@ func main() {
 	log.SetFlags(log.LstdFlags | log.LUTC)
 
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: mrmr <run|eval|events|label|dataset|inspect> [options]")
+		fmt.Fprintln(os.Stderr, "usage: mrmr <run|eval|events|label|dataset|inspect|auth> [options]")
 		os.Exit(2)
 	}
 
 	switch os.Args[1] {
+	case "auth":
+		if err := authCommand(os.Args[2:]); err != nil {
+			log.Fatal(err)
+		}
 	case "run":
 		if err := run(os.Args[2:]); err != nil {
 			log.Fatal(err)
@@ -66,7 +70,7 @@ func main() {
 			log.Fatal(err)
 		}
 	case "-h", "--help", "help":
-		fmt.Println("usage: mrmr <run|eval|events|label|dataset|inspect> [options]")
+		fmt.Println("usage: mrmr <run|eval|events|label|dataset|inspect|auth> [options]")
 	default:
 		log.Fatalf("unknown subcommand %q", os.Args[1])
 	}
@@ -95,21 +99,18 @@ func run(args []string) error {
 	defer db.Close()
 
 	rt := &runtime.Runtime{
-		DB:        db,
-		Client:    &model.Client{},
-		ModelCfg:  cfg.Models[cfg.Interpret.Model],
-		ModelKey:  cfg.Interpret.Model,
-		Prompt:    cfg.Interpret.Prompt,
-		Schema:    cfg.Interpret.Schema,
-		Questions: cfg.Interpret.Questions,
-		Policy:    cfg.Policy,
-		Filters:   cfg.Filter,
-	}
-	// Resolve delegation endpoints once at startup; policy rules reference
-	// agents by name only.
-	rt.AgentEndpoints = make(map[string]string, len(cfg.Agents))
-	for name, a := range cfg.Agents {
-		rt.AgentEndpoints[name] = a.Endpoint
+		DB:              db,
+		Client:          &model.Client{},
+		ModelCfg:        cfg.Models[cfg.Interpret.Model],
+		ModelKey:        cfg.Interpret.Model,
+		Prompt:          cfg.Interpret.Prompt,
+		Schema:          cfg.Interpret.Schema,
+		Questions:       cfg.Interpret.Questions,
+		Policy:          cfg.Policy,
+		Filters:         cfg.Filter,
+		Agents:          cfg.Agents,
+		Models:          cfg.Models,
+		InterpretByType: cfg.InterpretByType,
 	}
 
 	mux := http.NewServeMux()

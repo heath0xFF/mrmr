@@ -1,0 +1,63 @@
+# Local d1 candidate, not a promoted default. No sources activate on startup.
+# Keep the same MRMR_D1_API_KEY in the serving and mrmr environments.
+server:
+  addr: 127.0.0.1:4242
+db:
+  path: mrmr-d1.db
+
+models:
+  d1:
+    # Existing System One wire protocol; this does NOT contact TypeSafe.
+    provider: typesafe
+    base_url: http://127.0.0.1:8091/v1
+    api_key_env: MRMR_D1_API_KEY
+    model: LiquidAI/d1-3B@da1fe36a861f24690f27f622dca1d8688503d113:cpu-fp32
+
+interpret:
+  model: d1
+  questions:
+    category:
+      type: choice
+      instructions: Which category best describes this ambient event?
+      criteria:
+        incident: Something is broken, unavailable, repeatedly failing, or losing data now.
+        noise: Routine activity that needs no operator attention.
+        FYI: Useful information with nothing to do.
+        actionable: Something the user should consider doing, but not an incident.
+    requires_action:
+      type: noul
+      instructions: Does this event indicate that the operator genuinely needs to take action?
+      criteria:
+        true: Intervention or investigation by the operator is warranted.
+        false: No operator action is warranted from this event alone.
+    severity:
+      type: score
+      instructions: How severe is the operational impact described by this event?
+      criteria:
+        - No meaningful service impact.
+        - A service is degraded, but a workaround or automatic recovery exists.
+        - A service is unavailable or data is at risk, with no stated workaround.
+
+# Provisional thresholds, NOT transferred calibration from Jev. Every effect
+# stays shadowed until the specific model variant passes the real-event gate.
+policy:
+  - if:
+      result.category.choice: incident
+      result.category.confidence: ">= 0.85"
+      result.requires_action.noul: ">= 0.85"
+    then:
+      notify:
+        via: stdout
+        message: "{{ .event.subject }}: {{ .event.data.message }}"
+      shadow: true
+  - if:
+      result.category.choice: actionable
+      result.category.confidence: ">= 0.85"
+      result.requires_action.noul: ">= 0.85"
+    then:
+      notify:
+        via: stdout
+        message: "{{ .event.subject }}: {{ .event.data.message }}"
+      shadow: true
+default:
+  ignore: true

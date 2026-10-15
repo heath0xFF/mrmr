@@ -62,6 +62,8 @@ type Execution struct {
 	Status     string    `json:"status"`
 	Error      string    `json:"error,omitempty"`
 	CreatedAt  time.Time `json:"created_at"`
+	PolicyRule string    `json:"policy_rule,omitempty"`
+	PolicyHash string    `json:"policy_hash,omitempty"`
 }
 
 // Inspection is everything the runtime durably knows about one event, which
@@ -71,11 +73,12 @@ type Execution struct {
 // of each per event; the current pipeline writes one, and reporting what is
 // actually stored beats encoding that assumption in the reader.
 type Inspection struct {
-	Event      event.Event       `json:"event"`
-	Decisions  []event.Decision  `json:"decisions,omitempty"`
-	Executions []Execution       `json:"executions,omitempty"`
-	Trace      []event.TraceStep `json:"trace,omitempty"`
-	Label      *EventLabel       `json:"label,omitempty"`
+	Event         event.Event       `json:"event"`
+	Decisions     []event.Decision  `json:"decisions,omitempty"`
+	Executions    []Execution       `json:"executions,omitempty"`
+	Trace         []event.TraceStep `json:"trace,omitempty"`
+	Label         *EventLabel       `json:"label,omitempty"`
+	ChildEventIDs []string          `json:"child_event_ids,omitempty"`
 }
 
 // Open opens (creating if needed) the SQLite database with WAL mode
@@ -167,6 +170,13 @@ CREATE TABLE source_cursors (
 	updated_at TEXT NOT NULL
 );
 `,
+	`
+ALTER TABLE events ADD COLUMN depth INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE events ADD COLUMN provenance TEXT;
+CREATE INDEX idx_events_parent ON events(json_extract(provenance, '$.parent_event_id'));
+ALTER TABLE executions ADD COLUMN policy_rule TEXT NOT NULL DEFAULT '';
+ALTER TABLE executions ADD COLUMN policy_hash TEXT NOT NULL DEFAULT '';
+`,
 }
 
 func (d *DB) migrate() error {
@@ -209,6 +219,10 @@ func now() string { return time.Now().UTC().Format(time.RFC3339Nano) }
 func (d *DB) InsertEvent(e event.Event) (*EventRecord, error) {
 	data, _ := json.Marshal(e.Data)
 	meta, _ := json.Marshal(e.Metadata)
+	provenance, err := json.Marshal(e.Provenance)
+	if err != nil {
+		return nil, fmt.Errorf("encode event provenance: %w", err)
+	}
 	dedup := event.SourceEventID(e.Metadata["source_event_id"])
 	if dedup == "" {
 		h := sha256.New()
@@ -216,10 +230,10 @@ func (d *DB) InsertEvent(e event.Event) (*EventRecord, error) {
 		dedup = hex.EncodeToString(h.Sum(nil))
 	}
 
-	res, err := d.Exec(`INSERT INTO events (id, type, source, subject, event_time, ingest_time, data, metadata, dedup_key)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	res, err := d.Exec(`INSERT INTO events (id, type, source, subject, event_time, ingest_time, data, metadata, dedup_key, depth, provenance)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(source, dedup_key) DO NOTHING`,
-		e.ID, e.Type, e.Source, e.Subject, e.Timestamp.Format(time.RFC3339Nano), now(), data, meta, dedup)
+		e.ID, e.Type, e.Source, e.Subject, e.Timestamp.Format(time.RFC3339Nano), now(), data, meta, dedup, e.Depth, provenance)
 	if err != nil {
 		return nil, fmt.Errorf("insert event %s: %w", e.ID, err)
 	}
@@ -245,18 +259,32 @@ func (d *DB) InsertDecision(dec event.Decision) error {
 }
 
 func (d *DB) InsertExecution(id, eventID, decisionID, outcome, adapter, status, errMsg string) error {
+	return d.BeginExecution(Execution{ID: id, EventID: eventID, DecisionID: decisionID, Outcome: outcome, Adapter: adapter, Status: status, Error: errMsg})
+}
+
+// BeginExecution commits intent before an adapter runs. No transaction is held
+// across external work; a crash leaves pending intent, not an invisible effect.
+func (d *DB) BeginExecution(x Execution) error {
 	// decisionID may be empty for outcomes that produce no Decision
 	// (filter-excluded events). The column is a foreign key, so empty
 	// maps to NULL: an empty string would be a dangling reference.
 	var decID any
-	if decisionID != "" {
-		decID = decisionID
+	if x.DecisionID != "" {
+		decID = x.DecisionID
 	}
-	_, err := d.Exec(`INSERT INTO executions (id, event_id, decision_id, outcome, adapter, status, error, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		id, eventID, decID, outcome, adapter, status, errMsg, now())
+	_, err := d.Exec(`INSERT INTO executions (id, event_id, decision_id, outcome, adapter, status, error, created_at, policy_rule, policy_hash)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		x.ID, x.EventID, decID, x.Outcome, x.Adapter, x.Status, x.Error, now(), x.PolicyRule, x.PolicyHash)
 	if err != nil {
-		return fmt.Errorf("insert execution %s: %w", id, err)
+		return fmt.Errorf("insert execution %s: %w", x.ID, err)
+	}
+	return nil
+}
+
+func (d *DB) FinishExecution(id, status, errMsg string) error {
+	_, err := d.Exec(`UPDATE executions SET status = ?, error = ? WHERE id = ?`, status, errMsg, id)
+	if err != nil {
+		return fmt.Errorf("finish execution %s: %w", id, err)
 	}
 	return nil
 }

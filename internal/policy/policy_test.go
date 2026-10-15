@@ -5,7 +5,11 @@
 // changes what outcomes users see.
 package policy
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/heath0xff/mrmr/internal/event"
+)
 
 func notify() Then         { return Then{Notify: &Notify{Via: "stdout"}} }
 func ignore() Then         { return Then{Ignore: true} }
@@ -14,6 +18,25 @@ func isNotify(t Then) bool { return t.Outcome() == "notify" }
 func eval(t testing.TB, p Policy, result map[string]any) Then {
 	then, _ := p.Evaluate(result)
 	return then
+}
+
+func TestEventFactsCannotBeReplacedByJudgment(t *testing.T) {
+	p := Policy{Rules: []Rule{{If: map[string]any{"event.type": "journal", "event.depth": 0, "result.category.choice": "investigate"}, Then: Then{Delegate: &Delegate{Agent: "fixed"}}}}, Default: ignore()}
+	result := map[string]any{"category": map[string]any{"choice": "investigate"}, "event": map[string]any{"type": "journal", "depth": 0}}
+	if then, _ := p.EvaluateEvent(result, event.Event{Type: "agent.completed", Depth: 1}); then.Outcome() != "ignore" {
+		t.Fatal("model overwrote runtime event context")
+	}
+	if then, _ := p.EvaluateEvent(result, event.Event{Type: "journal"}); then.Outcome() != "delegate" {
+		t.Fatal("ordinary source event did not match")
+	}
+	version := p.Version()
+	if len(version) != 64 || version != p.Version() {
+		t.Fatal("unstable policy identity")
+	}
+	p.Rules[0].Then.Delegate.Agent = "another-fixed-target"
+	if version == p.Version() {
+		t.Fatal("policy change retained its old identity")
+	}
 }
 
 func TestEvaluateOperators(t *testing.T) {

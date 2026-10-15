@@ -123,10 +123,10 @@ func TestJournalCheckpointFilteringAndRecovery(t *testing.T) {
 		t.Fatalf("unexpected normalized event/trace: %+v", ins)
 	}
 	args, err := os.ReadFile(filepath.Join(filepath.Dir(j.path), "args"))
-	if err != nil || !strings.Contains(string(args), "--lines=+101") || !strings.Contains(string(args), "--system") {
-		t.Fatalf("must scan oldest system records: %s, %v", args, err)
+	if err != nil || !strings.Contains(string(args), "--lines=+101") || strings.Contains(string(args), "--system") || !strings.Contains(string(args), "_SYSTEMD_USER_UNIT") {
+		t.Fatalf("must scan oldest records across UID-split journal files: %s, %v", args, err)
 	}
-	// No matching warnings still advances through the system journal,
+	// No matching warnings still advances through the journal,
 	// keeping an otherwise quiet source's checkpoint fresh.
 	journalFile(t, j, "batch", journalJSON("c", "example.service", "3", "error")+journalJSON("quiet", "other.service", "6", "routine"))
 	if err := j.poll(ctx, rt); err != nil {
@@ -193,6 +193,17 @@ func TestJournalNormalizationBoundaries(t *testing.T) {
 		t.Fatal("arbitrary UNIT field must not bypass system-unit selection")
 	}
 	r["_SYSTEMD_UNIT"] = json.RawMessage(`"example.service"`)
+	r["_UID"] = json.RawMessage(`"1000"`)
+	if _, selected, err := j.normalize(r, "a"); err != nil || !selected {
+		t.Fatal("system service running as a regular UID must be selected")
+	}
+	for _, userUnit := range []string{`"hermes.service"`, `null`, `["hermes.service"]`} {
+		r["_SYSTEMD_USER_UNIT"] = json.RawMessage(userUnit)
+		if _, selected, _ := j.normalize(r, "a"); selected {
+			t.Fatal("user-unit records must not bypass the system-unit boundary")
+		}
+	}
+	delete(r, "_SYSTEMD_USER_UNIT")
 	for _, msg := range []string{`null`, `[65,66]`, `""`} {
 		r["MESSAGE"] = json.RawMessage(msg)
 		e, _, err := j.normalize(r, "a")

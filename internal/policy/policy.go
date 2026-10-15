@@ -9,17 +9,21 @@
 package policy
 
 import (
+	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/heath0xff/mrmr/internal/event"
 )
 
-// Notify describes a notification outcome. Via names the adapter; v0.1
-// ships only stdout. Message is a Go template executed over the decision
-// result so flows can surface the model's own summary.
+// Notify selects a bounded adapter. WebhookEnv names a secret, never its value,
+// so policy hashes and exported configuration cannot disclose webhook tokens.
 type Notify struct {
-	Via     string `yaml:"via"`
-	Message string `yaml:"message"` // Go template over {result: ...}; empty = summary default
+	Via        string `yaml:"via"`
+	Message    string `yaml:"message"`               // Go template over {result, event}; empty = result default
+	WebhookEnv string `yaml:"webhook_env,omitempty"` // Discord only
 }
 
 // Action is a bounded deterministic action. Type http sends an HTTP request
@@ -39,8 +43,10 @@ type Action struct {
 // endpoint. Agent names an entry in the config's `agents:` map; the runtime
 // resolves it to an endpoint, so policy never carries URLs.
 type Delegate struct {
-	Agent  string `yaml:"agent"`
-	Prompt string `yaml:"prompt"`
+	Agent               string `yaml:"agent"`
+	Prompt              string `yaml:"prompt"`
+	EmitCompletion      bool   `yaml:"emit_completion"`
+	CompletionEventType string `yaml:"completion_event_type"`
 }
 
 // Then is the selected outcome for an event. At most one of Notify, Action,
@@ -92,18 +98,34 @@ type Policy struct {
 // doesn't match — missing data must fall through to less aggressive
 // outcomes, never block them.
 func (p Policy) Evaluate(result map[string]any) (Then, int) {
+	return p.EvaluateEvent(result, event.Event{})
+}
+
+// EvaluateEvent lets ordinary event facts constrain effects without asking a
+// model to classify its own authority (for example, never redelegate a result).
+func (p Policy) EvaluateEvent(result map[string]any, e event.Event) (Then, int) {
 	for i, r := range p.Rules {
-		if matchesAll(r.If, result) {
+		if matchesAll(r.If, result, e) {
 			return r.Then, i
 		}
 	}
 	return p.Default, -1
 }
 
-func matchesAll(conds map[string]any, result map[string]any) bool {
+// Version identifies the exact policy that selected an execution across config changes.
+func (p Policy) Version() string {
+	// Config validation rejects non-JSON values before activation.
+	b, _ := json.Marshal(p)
+	return fmt.Sprintf("%x", sha256.Sum256(b))
+}
+
+func matchesAll(conds map[string]any, result map[string]any, e event.Event) bool {
 	for key, want := range conds {
 		path := strings.TrimPrefix(key, "result.")
 		got, ok := lookup(result, path)
+		if strings.HasPrefix(key, "event.") {
+			got, ok = lookup(map[string]any{"type": e.Type, "source": e.Source, "subject": e.Subject, "depth": e.Depth, "data": e.Data}, strings.TrimPrefix(key, "event."))
+		}
 		if !ok || !match(want, got) {
 			return false
 		}

@@ -16,13 +16,16 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"text/template"
 	"time"
 
+	"github.com/heath0xff/mrmr/internal/agent"
 	"github.com/heath0xff/mrmr/internal/event"
 	"github.com/heath0xff/mrmr/internal/filter"
 	"github.com/heath0xff/mrmr/internal/model"
+	"github.com/heath0xff/mrmr/internal/notify"
 	"github.com/heath0xff/mrmr/internal/policy"
 	"github.com/heath0xff/mrmr/internal/storage"
 )
@@ -40,12 +43,13 @@ type Runtime struct {
 	Questions model.Questions
 	Policy    policy.Policy
 	Filters   filter.List
-	// AgentEndpoints maps a policy delegate.agent name to its HTTP endpoint.
-	// Resolved at startup from config so policy rules never carry URLs.
-	AgentEndpoints map[string]string
-	// HTTP is the client for action/delegate side effects. Nil means a
-	// default 10s timeout — outbound effects must be bounded, never hang
-	// the synchronous ingest path.
+	// Exact type overrides allow a completion to ask a different bounded
+	// question without introducing independently routed workflows.
+	InterpretByType map[string]model.Interpretation
+	Models          map[string]model.Config
+	Agents          map[string]agent.Config
+	// HTTP supplies effect transport. Actions and Discord notifications use
+	// a 10s bound; agents apply their configured bounded timeout separately.
 	HTTP *http.Client
 }
 
@@ -77,7 +81,6 @@ func step(t *[]TraceStep, stage, msg string) {
 // Ingest is the whole pipeline for one event, synchronously. It never
 // returns an error for a "bad" decision or outcome — a schema-invalid model
 // or a down endpoint is normal operation, recorded in the decision and trace
-// — only for persistence failures, which are the caller's (HTTP handler's)
 // — only for persistence failures on writes that happen before any outcome
 // is decided (the event row, the decision row). Once the outcome is chosen,
 // the fate is known: later failures (execution row, trace) are logged, not
@@ -97,7 +100,7 @@ func (r *Runtime) Ingest(ctx context.Context, e event.Event) (*Response, error) 
 	// and there is nothing to inspect anyway — the original event's trace
 	// already tells that story. A trace write failure is logged and the
 	// response returned normally: the event, decision, and execution rows
-	// are all durable and the outcome has fired, so the request succeeded
+	// describe the outcome attempt, so the request succeeded
 	// — only the durable copy of the trace is lost, and the in-memory
 	// trace still goes out with the response.
 	if !resp.Duplicate {
@@ -152,10 +155,18 @@ func (r *Runtime) ingest(ctx context.Context, e event.Event, t *[]TraceStep) (*R
 		step(t, "filter", fmt.Sprintf("%d checks passed", len(r.Filters)))
 	}
 
-	dec := &event.Decision{ID: event.NewID("dec_"), EventID: e.ID, Interpreter: r.ModelKey, Model: r.ModelCfg.Model}
+	spec := model.Interpretation{Model: r.ModelKey, Prompt: r.Prompt, Schema: r.Schema, Questions: r.Questions}
+	mc := r.ModelCfg
+	if override, ok := r.InterpretByType[e.Type]; ok {
+		spec, mc = override, r.Models[override.Model]
+	}
+	dec := &event.Decision{ID: event.NewID("dec_"), EventID: e.ID, Interpreter: spec.Model, Model: mc.Model}
 
-	eventJSON, _ := json.Marshal(e)
-	result, latency, modelID, err := r.Client.InterpretWithQuestions(ctx, r.ModelCfg, r.ModelKey, r.Prompt, r.Schema, r.Questions, eventJSON)
+	eventJSON, err := json.Marshal(e)
+	if err != nil {
+		return nil, fmt.Errorf("encode event: %w", err)
+	}
+	result, latency, modelID, err := r.Client.InterpretWithQuestions(ctx, mc, spec.Model, spec.Prompt, spec.Schema, spec.Questions, eventJSON)
 	dec.Model = modelID
 	dec.LatencyMs = latency
 
@@ -163,7 +174,7 @@ func (r *Runtime) ingest(ctx context.Context, e event.Event, t *[]TraceStep) (*R
 		if inv, ok := err.(*model.InvalidOutputError); ok {
 			dec.Status = "invalid"
 			dec.Error = inv.Error()
-			step(t, "interpret", "schema-invalid after retry")
+			step(t, "interpret", "invalid decision output")
 		} else {
 			dec.Status = "errored"
 			dec.Error = err.Error()
@@ -184,9 +195,9 @@ func (r *Runtime) ingest(ctx context.Context, e event.Event, t *[]TraceStep) (*R
 	// A model that is down or wrong must not be able to trigger actions —
 	// policy evaluates judgment, and there is no judgment to evaluate.
 	var then policy.Then
+	ruleIdx := -1
 	if dec.Status == "ok" {
-		var ruleIdx int
-		then, ruleIdx = r.Policy.Evaluate(dec.Result) // assignment, not := — the outer then must be set here
+		then, ruleIdx = r.Policy.EvaluateEvent(dec.Result, e) // assignment, not := — the outer then must be set here
 		if ruleIdx < 0 {
 			step(t, "policy", "default → "+then.Outcome())
 		} else {
@@ -201,10 +212,31 @@ func (r *Runtime) ingest(ctx context.Context, e event.Event, t *[]TraceStep) (*R
 	// how a new flow earns trust before going live. Promotion is later a
 	// config change, not a rewrite.
 	execErr := ""
-	if then.Shadow {
+	rule := "default"
+	if ruleIdx >= 0 {
+		rule = fmt.Sprintf("rule:%d", ruleIdx+1)
+	}
+	if dec.Status != "ok" {
+		rule = "decision-failed"
+	}
+	x := storage.Execution{ID: event.NewID("exe_"), EventID: e.ID, DecisionID: dec.ID,
+		Outcome: then.Outcome(), Adapter: adapterFor(then), Status: "pending", PolicyRule: rule, PolicyHash: r.Policy.Version()}
+	// Without durable intent there can be no effect or child event. A pending
+	// row after a crash remains inspectable; it is never automatically retried.
+	intentErr := r.DB.BeginExecution(x)
+	if intentErr != nil {
+		execErr = "execution intent could not be persisted; effect suppressed"
+		log.Printf("mrmr: persist execution for %s: %v", e.ID, intentErr)
+	} else if then.Shadow {
 		step(t, "outcome", "shadow: "+then.Outcome()+" recorded but not executed")
 	} else {
-		execErr = r.execute(ctx, then, dec, e, t)
+		origin := e.ID
+		if e.Provenance != nil {
+			origin = e.Provenance.OriginEventID
+		}
+		lineage := event.Provenance{ParentEventID: e.ID, OriginEventID: origin, DecisionID: dec.ID,
+			ExecutionID: x.ID, PolicyRule: rule, PolicyHash: x.PolicyHash}
+		execErr = r.execute(ctx, then, dec, e, lineage, t)
 	}
 	if execErr != "" {
 		step(t, "outcome", "error: "+execErr)
@@ -218,12 +250,11 @@ func (r *Runtime) ingest(ctx context.Context, e event.Event, t *[]TraceStep) (*R
 	case then.Shadow:
 		status = "shadow"
 	}
-	// This is the one execution write on a path where a side effect may
-	// have already fired, so it must never fail the request: the outcome
-	// is decided and the response still reports it. The audit gap (no
-	// execution row) is real but a 500 would not repair it — the source's
-	// retry would dedup-drop, losing the row permanently.
-	r.recordExecution(e.ID, dec.ID, then.Outcome(), adapterFor(then), status, execErr)
+	if intentErr == nil {
+		if err := r.DB.FinishExecution(x.ID, status, execErr); err != nil {
+			log.Printf("mrmr: finish execution %s failed: %v", x.ID, err)
+		}
+	}
 
 	return &Response{EventID: e.ID, Decision: dec, Outcome: then.Outcome(), Trace: *t}, nil
 }
@@ -255,13 +286,21 @@ func adapterFor(t policy.Then) string {
 // Ignore is a success — most events should end here; suppressing noise is
 // half the point of ambient AI. Emit recursion is synchronous by design:
 // it is depth-capped, so no goroutines, no queue, nothing to leak.
-func (r *Runtime) execute(ctx context.Context, t policy.Then, dec *event.Decision, parent event.Event, tr *[]TraceStep) string {
+func (r *Runtime) execute(ctx context.Context, t policy.Then, dec *event.Decision, parent event.Event, lineage event.Provenance, tr *[]TraceStep) string {
 	switch {
 	case t.Notify != nil:
-		if t.Notify.Via != "stdout" {
-			return fmt.Sprintf("unsupported notify via %q", t.Notify.Via) // config validation should prevent this
+		message := renderMessage(t.Notify.Message, dec, parent)
+		switch t.Notify.Via {
+		case "stdout":
+			fmt.Println(message)
+		case "discord":
+			// Resolve secrets only after the durable intent and shadow gate.
+			if err := notify.Discord(ctx, r.httpClient(), os.Getenv(t.Notify.WebhookEnv), message); err != nil {
+				return err.Error()
+			}
+		default:
+			return fmt.Sprintf("unsupported notify via %q", t.Notify.Via)
 		}
-		fmt.Println(renderMessage(t.Notify.Message, dec, parent))
 		return ""
 
 	case t.Action != nil:
@@ -292,13 +331,15 @@ func (r *Runtime) execute(ctx context.Context, t policy.Then, dec *event.Decisio
 			// parent id) means one emit per parent; multiple emit rules on one
 			// flow would dedup-collide. Split flows if that's ever needed.
 			child := event.Event{
-				ID:        event.NewID("evt_"),
-				Type:      t.Action.EventType,
-				Source:    "mrmr",
-				Timestamp: time.Now().UTC(),
-				Data:      dec.Result,
-				Metadata:  map[string]any{"source_event_id": parent.ID},
-				Depth:     parent.Depth + 1,
+				ID:         event.NewID("evt_"),
+				Type:       t.Action.EventType,
+				Source:     "mrmr",
+				Timestamp:  time.Now().UTC(),
+				Data:       dec.Result,
+				Metadata:   map[string]any{"source_event_id": parent.ID},
+				Depth:      parent.Depth + 1,
+				Subject:    parent.Subject,
+				Provenance: &lineage,
 			}
 			step(tr, "emit", "emitted "+child.ID+" type="+child.Type+" depth="+fmt.Sprint(child.Depth))
 			resp, err := r.Ingest(ctx, child)
@@ -311,19 +352,7 @@ func (r *Runtime) execute(ctx context.Context, t policy.Then, dec *event.Decisio
 		return fmt.Sprintf("unsupported action type %q", t.Action.Type) // config validation should prevent this
 
 	case t.Delegate != nil:
-		endpoint, ok := r.AgentEndpoints[t.Delegate.Agent]
-		if !ok {
-			return fmt.Sprintf("unknown agent %q", t.Delegate.Agent) // config validation should prevent this
-		}
-		// Generic HTTP agent contract: one POST, JSON payload, 2xx means
-		// accepted. The agent's work is its own business; mrmr records that
-		// it delegated, to whom, and why.
-		payload, _ := json.Marshal(struct {
-			EventID  string         `json:"event_id"`
-			Decision map[string]any `json:"decision"`
-			Prompt   string         `json:"prompt"`
-		}{dec.EventID, dec.Result, t.Delegate.Prompt})
-		return r.do(ctx, http.MethodPost, endpoint, string(payload))
+		return r.delegate(ctx, *t.Delegate, dec, parent, lineage, tr)
 	}
 	return "" // ignore is a success
 }
@@ -352,10 +381,13 @@ func (r *Runtime) do(ctx context.Context, method, url, body string) string {
 }
 
 func (r *Runtime) httpClient() *http.Client {
+	client := http.Client{Timeout: 10 * time.Second}
 	if r.HTTP != nil {
-		return r.HTTP
+		client = *r.HTTP
 	}
-	return &http.Client{Timeout: 10 * time.Second}
+	// A configured destination cannot redirect an effect to an unconfigured one.
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	return &client
 }
 
 // renderMessage applies the notify template over the decision result.

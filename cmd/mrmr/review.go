@@ -9,6 +9,7 @@ import (
 	"strconv"
 
 	"github.com/heath0xff/mrmr/internal/config"
+	"github.com/heath0xff/mrmr/internal/model"
 	"github.com/heath0xff/mrmr/internal/storage"
 )
 
@@ -44,14 +45,14 @@ func events(args []string) error {
 
 func label(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: mrmr label EVENT_ID -category CATEGORY -requires-action=true|false -outcome ignore|notify")
+		return fmt.Errorf("usage: mrmr label EVENT_ID -category CATEGORY -requires-action=true|false -outcome ignore|notify|act|delegate")
 	}
 	eventID := args[0]
 	fs := flag.NewFlagSet("mrmr label", flag.ContinueOnError)
 	configPath := fs.String("config", "mrmr.yaml", "path to config file")
 	category := fs.String("category", "", "expected category")
 	requiresActionText := fs.String("requires-action", "", "whether action is required: true or false")
-	outcome := fs.String("outcome", "", "expected outcome: ignore or notify")
+	outcome := fs.String("outcome", "", "expected outcome: ignore, notify, act, or delegate")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -68,7 +69,13 @@ func label(args []string) error {
 		return err
 	}
 	defer db.Close()
-	if err := validateLabelCategory(cfg, *category); err != nil {
+	ins, err := db.Inspect(eventID)
+	if err != nil {
+		return err
+	}
+	selected := *cfg
+	selected.Interpret = cfg.InterpreterFor(ins.Event.Type)
+	if err := validateLabelCategory(&selected, *category); err != nil {
 		return err
 	}
 	stored, err := db.LabelEvent(eventID, *category, requiresAction, *outcome)
@@ -129,6 +136,16 @@ func openConfigDB(path string) (*config.Config, *storage.DB, error) {
 }
 
 func validateLabelCategory(cfg *config.Config, category string) error {
+	if q, ok := cfg.Interpret.Questions["category"]; ok && q.Type == "choice" {
+		// Config validation already checked descriptions and option names. Use
+		// the shared option reader so YAML and programmatic configs agree.
+		for _, option := range model.ChoiceOptions(q) {
+			if option == category {
+				return nil
+			}
+		}
+		return fmt.Errorf("category %q is not allowed by interpret.questions", category)
+	}
 	field, ok := cfg.Interpret.Schema["category"]
 	if !ok || field.Type != "string" {
 		return fmt.Errorf("labeling requires string interpret.schema field %q", "category")

@@ -19,10 +19,18 @@ filter:
 
 models:
   fast-local:
+    role: decision
+    # Legacy prompt/schema judgment remains supported. For typed questions and
+    # a complete investigation loop, see recipes/homelab-ambient/.
     provider: openai-compatible
     base_url: http://localhost:8000/v1
     api_key_env: MRMR_MODEL_API_KEY
     model: llama-3.1-8b-instruct
+  worker:
+    role: agent
+    provider: openai-compatible
+    base_url: http://localhost:8081/v1
+    model: LFM2.5-2.6B
 
 interpret:
   model: fast-local
@@ -102,11 +110,18 @@ policy:
   #     agent: triage
   #     prompt: |-
   #       Investigate this event and determine whether I need to act.
+  #     emit_completion: true # opt-in; requires a synchronous terminal JSON result
+  #     completion_event_type: agent.investigation.completed
+  #   shadow: true
 
 agents:
-  # Generic HTTP agent: mrmr POSTs {event_id, decision, prompt}; 2xx = accepted.
+  # Generic HTTP task contract, not /chat/completions. Without emit_completion,
+  # 2xx means accepted. The endpoint must enforce these read-only hints itself.
   triage:
     endpoint: http://localhost:9000/tasks
+    model: worker
+    read_only: true
+    capabilities: [service.status]
 
 default:
   ignore: true

@@ -73,25 +73,25 @@ func (d *DB) EventTrace(eventID string) ([]event.TraceStep, error) {
 	return steps, nil
 }
 
-// Inspect assembles everything stored about one event. It reads across four
-// tables without a transaction: the pipeline is finished with an event by
-// the time anyone inspects it, so there is no writer to race with, and a
-// read transaction on the single shared connection would block ingest for
-// no benefit.
+// Inspect assembles the durable records without holding a transaction across
+// queries. In-flight work may still show pending intent or an incomplete trace;
+// callers can inspect again after completion. No query holds the sole database
+// connection while another query needs it.
 func (d *DB) Inspect(eventID string) (*Inspection, error) {
 	var (
-		id, typ, source, subject, eventTime string
-		dataJSON, metadataJSON              sql.NullString
+		id, typ, source, subject, eventTime    string
+		dataJSON, metadataJSON, provenanceJSON sql.NullString
+		depth                                  int
 	)
-	err := d.QueryRow(`SELECT id, type, source, subject, event_time, data, metadata FROM events WHERE id = ?`, eventID).
-		Scan(&id, &typ, &source, &subject, &eventTime, &dataJSON, &metadataJSON)
+	err := d.QueryRow(`SELECT id, type, source, subject, event_time, data, metadata, depth, provenance FROM events WHERE id = ?`, eventID).
+		Scan(&id, &typ, &source, &subject, &eventTime, &dataJSON, &metadataJSON, &depth, &provenanceJSON)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("event %s not found", eventID)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("read event %s: %w", eventID, err)
 	}
-	e, err := decodeStoredEvent(id, typ, source, subject, eventTime, dataJSON, metadataJSON)
+	e, err := decodeStoredEvent(id, typ, source, subject, eventTime, dataJSON, metadataJSON, depth, provenanceJSON)
 	if err != nil {
 		return nil, err
 	}
@@ -108,6 +108,21 @@ func (d *DB) Inspect(eventID string) (*Inspection, error) {
 	}
 	if ins.Label, err = d.eventLabel(eventID); err != nil {
 		return nil, err
+	}
+	rows, err := d.Query(`SELECT id FROM events WHERE json_extract(provenance, '$.parent_event_id') = ? ORDER BY ingest_time, id`, eventID)
+	if err != nil {
+		return nil, fmt.Errorf("read child events: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("read child event: %w", err)
+		}
+		ins.ChildEventIDs = append(ins.ChildEventIDs, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read child events: %w", err)
 	}
 	return ins, nil
 }
@@ -142,7 +157,7 @@ func (d *DB) eventDecisions(eventID string) ([]event.Decision, error) {
 }
 
 func (d *DB) eventExecutions(eventID string) ([]Execution, error) {
-	rows, err := d.Query(`SELECT id, decision_id, outcome, adapter, status, error, created_at
+	rows, err := d.Query(`SELECT id, decision_id, outcome, adapter, status, error, created_at, policy_rule, policy_hash
 		FROM executions WHERE event_id = ? ORDER BY created_at, id`, eventID)
 	if err != nil {
 		return nil, fmt.Errorf("read executions for %s: %w", eventID, err)
@@ -154,7 +169,7 @@ func (d *DB) eventExecutions(eventID string) ([]Execution, error) {
 		x := Execution{EventID: eventID}
 		var decisionID, adapter, execErr sql.NullString
 		var createdAt string
-		if err := rows.Scan(&x.ID, &decisionID, &x.Outcome, &adapter, &x.Status, &execErr, &createdAt); err != nil {
+		if err := rows.Scan(&x.ID, &decisionID, &x.Outcome, &adapter, &x.Status, &execErr, &createdAt, &x.PolicyRule, &x.PolicyHash); err != nil {
 			return nil, fmt.Errorf("scan execution for %s: %w", eventID, err)
 		}
 		x.DecisionID, x.Adapter, x.Error = decisionID.String, adapter.String, execErr.String

@@ -23,7 +23,7 @@ import (
 
 const journalBatchSize = 100
 
-// Journal reads the local system journal only. It owns no background process:
+// Journal selects local system-unit records. It owns no background process:
 // each bounded journalctl call is reaped before interpretation begins. Run's
 // caller owns the single polling goroutine and cancels it on every exit path.
 // No command, arguments, permissions, or cursor ever come from a model.
@@ -34,7 +34,7 @@ type Journal struct {
 }
 
 // NewJournal checks platform, executable, journal access, and resume position
-// before the daemon activates ANY sources. Reading the unfiltered system tail
+// before the daemon activates ANY sources. Reading the unfiltered journal tail
 // distinguishes an empty unit selection from an inaccessible journal. We do
 // not suppress journalctl's permission warnings, even on a successful exit.
 func NewJournal(ctx context.Context, cfg config.Source, db *storage.DB) (*Journal, error) {
@@ -73,7 +73,7 @@ func (j *Journal) prepare(ctx context.Context, db *storage.DB) error {
 		return err
 	}
 	if len(records) != 1 {
-		return fmt.Errorf("no readable system journal entries; verify journald is running and this account has system journal read access")
+		return fmt.Errorf("no readable journal entries; verify journald is running and this account has system journal read access")
 	}
 	cursor, err = records[0].cursor()
 	if err != nil {
@@ -158,10 +158,9 @@ func (j *Journal) batch(ctx context.Context, cursor string) ([]journalRecord, er
 	// Include the checkpoint and require an exact match before consuming
 	// anything. --lines=+N reads the OLDEST next records, unlike -n N which
 	// could jump to the tail and lose a backlog larger than one batch.
-	// ponytail: scan 100 system records/tick and filter below; this preserves
-	// exact checkpoint verification and progress through quiet selections.
-	// Add indexed unit queries only if measured journal volume needs them.
-	records, err := j.read(ctx, "__CURSOR,__REALTIME_TIMESTAMP,_SYSTEMD_UNIT,UNIT,_PID,PRIORITY,MESSAGE",
+	// shortcut: scan 100 journal records/tick to preserve exact checkpoints;
+	// add indexed unit queries only if measured journal volume needs them.
+	records, err := j.read(ctx, "__CURSOR,__REALTIME_TIMESTAMP,_SYSTEMD_UNIT,_SYSTEMD_USER_UNIT,UNIT,_PID,PRIORITY,MESSAGE",
 		"--cursor="+cursor, "--lines=+"+strconv.Itoa(journalBatchSize+1))
 	if err != nil {
 		return nil, err
@@ -192,6 +191,11 @@ func (r journalRecord) cursor() (string, error) {
 }
 
 func (j *Journal) normalize(r journalRecord, cursor string) (event.Event, bool, error) {
+	// UID-split journal files can hold system services running as regular users.
+	// Select by trusted unit identity, but never ingest a user's own units.
+	if _, userUnit := r["_SYSTEMD_USER_UNIT"]; userUnit {
+		return event.Event{}, false, nil
+	}
 	// A broad unit choice must not turn our own notifications/diagnostics
 	// into new model work. Journald's trusted PID cannot be set by a client.
 	// Include boot identity: a persisted backlog may contain an unrelated
@@ -248,7 +252,9 @@ func (j *Journal) normalize(r journalRecord, cursor string) (event.Event, bool, 
 func (j *Journal) read(ctx context.Context, fields string, args ...string) ([]journalRecord, error) {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	argv := append([]string{"--system", "--no-pager", "--output=json", "--output-fields=" + fields}, args...)
+	// --system selects files, not unit ownership, and hides system services
+	// running under a regular UID. normalize enforces the system-unit boundary.
+	argv := append([]string{"--no-pager", "--output=json", "--output-fields=" + fields}, args...)
 	cmd := exec.CommandContext(ctx, j.path, argv...)
 	cmd.WaitDelay = time.Second
 	out, stderr := journalOutput{limit: 4 << 20}, journalOutput{limit: 4096}

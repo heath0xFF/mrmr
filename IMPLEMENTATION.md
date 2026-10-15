@@ -590,6 +590,59 @@ traces persist identically, promotion is a config change, not a rewrite.
 
 # Model architecture
 
+## Implemented ambient slice
+
+The current implementation separates two model roles:
+
+- `decision`: bounded Choice, Yes/No, and Score judgments. Providers return a
+  normalized typed answer surface before policy. System One transports serve
+  Jev and the verified local d1 recipe; an OpenAI-compatible path generates and
+  validates bounded answers without inventing probabilities. Existing flat
+  prompt/schema interpretation remains supported.
+- `agent`: a generative worker endpoint/model hint for a configured external
+  HTTP agent harness. It cannot be selected by an interpreter. The harness owns
+  tool enforcement and model authentication; mrmr does not embed an agent loop.
+
+```text
+event → persist + dedup → deterministic filters → decision model → judgment
+      → deterministic policy → ignore | notify | act | delegate
+                                                       ↓
+                                              external bounded work
+                                                       ↓
+                                            structured terminal result
+                                                       ↓
+                                          new event → judge → policy
+```
+
+`delegate.emit_completion` is explicit and defaults to false. When true, a
+bounded synchronous HTTP result produces a new event (default `agent.completed`).
+Acceptance-only 2xx endpoints keep their old behavior when the option is off.
+There is no asynchronous callback or polling protocol in this slice.
+
+Runtime-owned provenance links origin/parent event, Decision, execution intent,
+policy rule/hash, and agent. Depth is persisted and incremented for both emitted
+decisions and agent results; depth greater than 10 is recorded and forced to
+ignore before inference. Execution intent is durable before effects. Pending
+intent after a crash is visible but not automatically replayed.
+
+`interpret_by_type` selects a full replacement interpretation contract by exact
+event type. It is not a flow engine: filters and first-match policy remain shared.
+Policy may constrain `event.type`, `source`, `subject`, `depth`, and `data` alongside
+normalized judgments. URLs, methods, permissions, adapters, and tool names are
+never selected from model output. HTTP effects reject redirects.
+
+Notifications support stdout and Discord. Discord resolves a literal environment
+reference only after durable intent and the shadow gate. It accepts a fixed
+HTTPS Discord webhook, confirms creation, disables mentions/link previews, bounds
+message size and request time, and makes no application retries. Its credential
+URL and response body never enter errors or traces.
+
+Read-only/capability request fields are configured hints, not a sandbox. An
+external harness must enforce them with fixed tools and suitable credentials.
+The complete contract and shadowed example are in
+[recipes/homelab-ambient](recipes/homelab-ambient/README.md). README documents the
+supported configuration; later examples below remain design direction.
+
 mrmr should be completely model-agnostic.
 
 Example:
@@ -807,8 +860,10 @@ user-maintained forwarding script. `systemd-journal` owns bounded journalctl
 reads, exact cursor verification, unit/severity filtering, and shutdown;
 recipes supply the system-unit allowlist, model schema, and shadow policy.
 First activation starts at the current tail; a missing checkpoint never
-silently resets it. User journals and historical backfill are not part of
-the initial slice.
+silently resets it. User-unit monitoring and historical backfill are not part
+of the initial slice. A system service running as a regular UID can write to
+a per-user journal file: read accessible files and enforce the exact trusted
+system-unit allowlist before ingestion. Reject user-unit records.
 
 ---
 
@@ -1444,7 +1499,7 @@ v0.1 is Phase 0 plus durability — nothing more:
   JSON-schema validation, plus TypeSafe System One Choice/Noul/Score questions
 - deterministic filters
 - policy evaluation (semantics above)
-- all four outcomes plus shadow, wired to: stdout notify, HTTP action,
+- all four outcomes plus shadow, wired to: stdout/Discord notify, HTTP action,
   emit-event, generic-HTTP delegate
 - SQLite storage (events, decisions, executions)
 - trace printed per event / queryable via CLI

@@ -171,6 +171,33 @@ func TestEventsHandlerPreservesNumericIDs(t *testing.T) {
 	}
 }
 
+// API callers cannot forge runtime lineage or reset a worker chain through
+// top-level fields. Completion callbacks require a separate authenticated design.
+func TestEventsHandlerDoesNotAcceptRuntimeProvenance(t *testing.T) {
+	url, _ := modelServer(t, `{"category":"noise"}`)
+	db, err := storage.Open(filepath.Join(t.TempDir(), "provenance.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	rt := &runtime.Runtime{DB: db, Client: &model.Client{}, ModelCfg: model.Config{Provider: "openai-compatible", BaseURL: url}, Schema: model.Schema{"category": {Type: "string"}}, Policy: policy.Policy{Default: policy.Then{Ignore: true}}}
+	rec := post(t, eventsHandler(rt), "application/json", `{"type":"agent.completed","source":"external","depth":-100,"provenance":{"parent_event_id":"forged"}}`)
+	if rec.Code != 200 {
+		t.Fatal(rec.Body.String())
+	}
+	var resp runtime.Response
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	ins, err := db.Inspect(resp.EventID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ins.Event.Depth != 0 || ins.Event.Provenance != nil {
+		t.Fatal("external caller supplied runtime lineage")
+	}
+}
+
 func TestEventsHandlerRejectsBadRequests(t *testing.T) {
 	tests := []struct {
 		name string

@@ -17,8 +17,8 @@ func (d *DB) LabelEvent(eventID, category string, requiresAction bool, expectedO
 	if category == "" {
 		return nil, fmt.Errorf("category is required")
 	}
-	if expectedOutcome != "ignore" && expectedOutcome != "notify" {
-		return nil, fmt.Errorf("expected outcome must be ignore or notify")
+	if expectedOutcome != "ignore" && expectedOutcome != "notify" && expectedOutcome != "act" && expectedOutcome != "delegate" {
+		return nil, fmt.Errorf("expected outcome must be ignore, notify, act, or delegate")
 	}
 	var exists int
 	if err := d.QueryRow(`SELECT 1 FROM events WHERE id = ?`, eventID).Scan(&exists); err != nil {
@@ -60,7 +60,7 @@ func (d *DB) ListEvents(limit int, unlabeledOnly bool) ([]ReviewEvent, error) {
 		where = "WHERE l.event_id IS NULL"
 	}
 	rows, err := d.Query(`
-SELECT e.id, e.type, e.source, e.subject, e.event_time, e.data, e.metadata,
+SELECT e.id, e.type, e.source, e.subject, e.event_time, e.data, e.metadata, e.depth, e.provenance,
        d.id, d.interpreter, d.model, d.status, d.result, d.latency_ms, d.error,
        x.outcome,
        l.category, l.requires_action, l.expected_outcome, l.labeled_at
@@ -83,24 +83,25 @@ LIMIT ?`, limit)
 	var events []ReviewEvent
 	for rows.Next() {
 		var (
-			id, typ, source, subject, eventTime string
-			dataJSON, metadataJSON              sql.NullString
-			decisionID, interpreter, modelName  sql.NullString
-			decisionStatus, resultJSON          sql.NullString
-			latency                             sql.NullInt64
-			decisionErr, outcome                sql.NullString
-			category, expectedOutcome           sql.NullString
-			requiresAction                      sql.NullInt64
-			labeledAt                           sql.NullString
+			id, typ, source, subject, eventTime    string
+			dataJSON, metadataJSON, provenanceJSON sql.NullString
+			depth                                  int
+			decisionID, interpreter, modelName     sql.NullString
+			decisionStatus, resultJSON             sql.NullString
+			latency                                sql.NullInt64
+			decisionErr, outcome                   sql.NullString
+			category, expectedOutcome              sql.NullString
+			requiresAction                         sql.NullInt64
+			labeledAt                              sql.NullString
 		)
 		if err := rows.Scan(
-			&id, &typ, &source, &subject, &eventTime, &dataJSON, &metadataJSON,
+			&id, &typ, &source, &subject, &eventTime, &dataJSON, &metadataJSON, &depth, &provenanceJSON,
 			&decisionID, &interpreter, &modelName, &decisionStatus, &resultJSON, &latency, &decisionErr,
 			&outcome, &category, &requiresAction, &expectedOutcome, &labeledAt,
 		); err != nil {
 			return nil, fmt.Errorf("scan event: %w", err)
 		}
-		e, err := decodeStoredEvent(id, typ, source, subject, eventTime, dataJSON, metadataJSON)
+		e, err := decodeStoredEvent(id, typ, source, subject, eventTime, dataJSON, metadataJSON, depth, provenanceJSON)
 		if err != nil {
 			return nil, err
 		}
@@ -140,7 +141,7 @@ LIMIT ?`, limit)
 // deterministic JSONL exports.
 func (d *DB) LabeledEvents() ([]LabeledEvent, error) {
 	rows, err := d.Query(`
-SELECT e.id, e.type, e.source, e.subject, e.event_time, e.data, e.metadata,
+SELECT e.id, e.type, e.source, e.subject, e.event_time, e.data, e.metadata, e.depth, e.provenance,
        l.category, l.requires_action, l.expected_outcome, l.labeled_at
 FROM event_labels l
 JOIN events e ON e.id = l.event_id
@@ -153,17 +154,18 @@ ORDER BY e.ingest_time, e.id`)
 	var events []LabeledEvent
 	for rows.Next() {
 		var (
-			id, typ, source, subject, eventTime string
-			dataJSON, metadataJSON              sql.NullString
-			category, expectedOutcome           string
-			requiresAction                      bool
-			labeledAt                           string
+			id, typ, source, subject, eventTime    string
+			dataJSON, metadataJSON, provenanceJSON sql.NullString
+			depth                                  int
+			category, expectedOutcome              string
+			requiresAction                         bool
+			labeledAt                              string
 		)
-		if err := rows.Scan(&id, &typ, &source, &subject, &eventTime, &dataJSON, &metadataJSON,
+		if err := rows.Scan(&id, &typ, &source, &subject, &eventTime, &dataJSON, &metadataJSON, &depth, &provenanceJSON,
 			&category, &requiresAction, &expectedOutcome, &labeledAt); err != nil {
 			return nil, fmt.Errorf("scan labeled event: %w", err)
 		}
-		e, err := decodeStoredEvent(id, typ, source, subject, eventTime, dataJSON, metadataJSON)
+		e, err := decodeStoredEvent(id, typ, source, subject, eventTime, dataJSON, metadataJSON, depth, provenanceJSON)
 		if err != nil {
 			return nil, err
 		}
@@ -182,12 +184,17 @@ ORDER BY e.ingest_time, e.id`)
 	return events, nil
 }
 
-func decodeStoredEvent(id, typ, source, subject, eventTime string, dataJSON, metadataJSON sql.NullString) (event.Event, error) {
+func decodeStoredEvent(id, typ, source, subject, eventTime string, dataJSON, metadataJSON sql.NullString, depth int, provenanceJSON sql.NullString) (event.Event, error) {
 	at, err := time.Parse(time.RFC3339Nano, eventTime)
 	if err != nil {
 		return event.Event{}, fmt.Errorf("decode event %s time: %w", id, err)
 	}
-	e := event.Event{ID: id, Type: typ, Source: source, Subject: subject, Timestamp: at}
+	e := event.Event{ID: id, Type: typ, Source: source, Subject: subject, Timestamp: at, Depth: depth}
+	if provenanceJSON.Valid {
+		if err := json.Unmarshal([]byte(provenanceJSON.String), &e.Provenance); err != nil {
+			return event.Event{}, fmt.Errorf("decode event provenance: %w", err)
+		}
+	}
 	// Inspection and dataset export must not re-round identities that
 	// ingestion preserved. Decisions keep their separate schema decoding.
 	if dataJSON.Valid && dataJSON.String != "null" {

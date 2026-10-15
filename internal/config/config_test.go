@@ -360,6 +360,11 @@ default:
 	if _, err := Load(filepath.Join("..", "..", "recipes", "homelab-journal", "mrmr.typesafe.example.yaml")); err != nil {
 		t.Fatalf("load TypeSafe journal recipe: %v", err)
 	}
+	// Local d1 uses the same wire contract; a new serving recipe must not
+	// accidentally require a new provider or relax configuration validation.
+	if _, err := Load(filepath.Join("..", "..", "recipes", "local-d1", "mrmr.example.yaml")); err != nil {
+		t.Fatalf("load local d1 recipe: %v", err)
+	}
 }
 
 func TestValidateTypeSafeContract(t *testing.T) {

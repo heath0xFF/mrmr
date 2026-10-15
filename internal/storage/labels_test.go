@@ -62,12 +62,29 @@ func TestEventLabelReviewAndExport(t *testing.T) {
 	}
 }
 
+func TestLabelsIncludeActionAndDelegation(t *testing.T) {
+	d := openTestDB(t)
+	e := testEvent("work-label", nil)
+	if _, err := d.InsertEvent(e); err != nil {
+		t.Fatal(err)
+	}
+	for _, outcome := range []string{"act", "delegate"} {
+		if _, err := d.LabelEvent(e.ID, "needs_work", true, outcome); err != nil {
+			t.Fatal(err)
+		}
+		rows, err := d.LabeledEvents()
+		if err != nil || len(rows) != 1 || rows[0].Label.ExpectedOutcome != outcome {
+			t.Fatalf("export=%+v err=%v", rows, err)
+		}
+	}
+}
+
 func TestLabelEventRejectsInvalidInput(t *testing.T) {
 	d := openTestDB(t)
 	if _, err := d.LabelEvent("missing", "incident", true, "notify"); err == nil || !strings.Contains(err.Error(), "not found") {
 		t.Fatalf("missing event error = %v, want not found", err)
 	}
-	if _, err := d.LabelEvent("missing", "incident", true, "act"); err == nil || !strings.Contains(err.Error(), "ignore or notify") {
-		t.Fatalf("invalid outcome error = %v, want ignore or notify", err)
+	if _, err := d.LabelEvent("missing", "incident", true, "shell"); err == nil || !strings.Contains(err.Error(), "ignore, notify, act, or delegate") {
+		t.Fatalf("invalid outcome error = %v, want allowed outcome list", err)
 	}
 }

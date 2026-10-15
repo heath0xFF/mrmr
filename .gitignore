@@ -11,6 +11,9 @@ mrmr.yaml
 # Captured events may contain sensitive payloads; sanitize before committing.
 testdata/real-eval*.jsonl
 
+# Local web-research artifacts
+.firecrawl/
+
 # Test/editor artifacts
 coverage.out
 .DS_Store

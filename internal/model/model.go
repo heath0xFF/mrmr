@@ -22,7 +22,8 @@ import (
 // name only (api_key_env) — never inlined — so config files stay safe to
 // commit and inspect.
 type Config struct {
-	Provider  string `yaml:"provider"` // openai-compatible | typesafe
+	Role      string `yaml:"role"`     // decision | agent; omitted preserves legacy interpretation
+	Provider  string `yaml:"provider"` // openai-compatible | typesafe | system-one | liquid-d1
 	BaseURL   string `yaml:"base_url"`
 	APIKeyEnv string `yaml:"api_key_env"`
 	Model     string `yaml:"model"`
@@ -57,18 +58,25 @@ func (c *Client) Interpret(ctx context.Context, cfg Config, interpreter string, 
 	return c.InterpretWithQuestions(ctx, cfg, interpreter, prompt, schema, nil, eventJSON)
 }
 
-// InterpretWithQuestions dispatches one event to the selected provider.
-// Keeping this concrete avoids a provider framework: there are exactly two
-// real protocols, and each validates its response before returning a Decision.
+// InterpretWithQuestions preserves the legacy flat-schema path while routing
+// bounded questions through the decision-provider contract.
 func (c *Client) InterpretWithQuestions(ctx context.Context, cfg Config, interpreter string, prompt string, schema Schema, questions Questions, eventJSON []byte) (result map[string]any, latencyMs int64, model string, err error) {
-	switch cfg.Provider {
-	case "openai-compatible":
-		return c.interpretOpenAI(ctx, cfg, interpreter, prompt, schema, eventJSON)
-	case "typesafe":
-		return c.interpretTypeSafe(ctx, cfg, questions, eventJSON)
-	default:
-		return nil, 0, cfg.Model, fmt.Errorf("unsupported model provider %q", cfg.Provider)
+	if cfg.Role == "agent" {
+		return nil, 0, cfg.Model, fmt.Errorf("agent model cannot interpret events")
 	}
+	if cfg.Provider == "openai-compatible" && len(questions) == 0 {
+		return c.interpretOpenAI(ctx, cfg, interpreter, prompt, schema, eventJSON)
+	}
+	provider, err := NewDecisionProvider(cfg)
+	if err != nil {
+		return nil, 0, cfg.Model, err
+	}
+	judgment, err := provider.Decide(ctx, questions, eventJSON)
+	if err != nil {
+		return nil, judgment.LatencyMs, judgment.Model, err
+	}
+	result, err = judgment.result()
+	return result, judgment.LatencyMs, judgment.Model, err
 }
 
 // interpretOpenAI sends the event to an OpenAI-compatible model. Error is

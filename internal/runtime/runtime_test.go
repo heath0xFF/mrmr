@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/heath0xff/mrmr/internal/agent"
 	"github.com/heath0xff/mrmr/internal/event"
 	"github.com/heath0xff/mrmr/internal/filter"
 	"github.com/heath0xff/mrmr/internal/model"
@@ -540,7 +541,7 @@ func TestIngestDelegatePostsAgentPayload(t *testing.T) {
 	agentURL, _, gotBody, _ := httpTarget(t)
 	url, _ := modelServer(t, `{"category":"important","importance":0.95}`)
 	rt := newTestRuntime(t, url)
-	rt.AgentEndpoints = map[string]string{"triage": agentURL}
+	rt.Agents = map[string]agent.Config{"triage": {Endpoint: agentURL}}
 	rt.Policy = policy.Policy{
 		Rules: []policy.Rule{{
 			If:   map[string]any{"result.importance": "> 0.8"},
@@ -696,9 +697,8 @@ func TestIngestTraceWriteFailureStillSucceeds(t *testing.T) {
 	}
 }
 
-// TestIngestExecutionWriteFailureStillSucceeds covers the same rule on the
-// execution row: the side effect has fired by the time the row is written,
-// so the request must report the outcome, not fail it.
+// A failed intent write suppresses the effect but still reports the selected
+// outcome and error. Retrying ingestion cannot repair the durable event.
 func TestIngestExecutionWriteFailureStillSucceeds(t *testing.T) {
 	url, _ := modelServer(t, `{"category":"important","importance":0.95}`)
 	rt := newTestRuntime(t, url)
@@ -711,6 +711,6 @@ func TestIngestExecutionWriteFailureStillSucceeds(t *testing.T) {
 		t.Fatalf("Ingest = err %v, want success with degraded audit row", err)
 	}
 	if resp.Outcome != "notify" {
-		t.Errorf("outcome = %q, want notify (the side effect fired)", resp.Outcome)
+		t.Errorf("outcome = %q, want selected notify outcome", resp.Outcome)
 	}
 }
