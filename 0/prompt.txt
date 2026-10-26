@@ -1,0 +1,496 @@
+You are working in the `heath0xFF/mrmr` repository.
+
+Your goal is to evolve mrmr from a generic event-driven AI runtime into a cleaner ambient-AI architecture centered on two distinct model roles:
+
+1. a **decision model** for cheap, bounded semantic judgment
+2. a **small generative/tool-using model** for delegated investigation or work
+
+The target pairing I have in mind is Liquid AI `d1-3B` + `LFM2.5-2.6B`, but the implementation should remain provider-agnostic where practical.
+
+Do not make d1 or LFM-specific assumptions deeper in the runtime than necessary.
+
+The architectural principle to preserve is:
+
+> LLM = judgment. Runtime = authority.
+
+Models may interpret, investigate, summarize, recommend, and return structured results. The runtime and deterministic policy remain responsible for permissions, effect selection, execution, rate limits, approvals, and other authority.
+
+Start by reading the entire repository, especially:
+
+- `README.md`
+- `IMPLEMENTATION.md`
+- `SETUP.md`
+- `mrmr.example.yaml`
+- `internal/model/*`
+- `internal/runtime/*`
+- `internal/policy/*`
+- `internal/event/*`
+- `internal/source/*`
+- `internal/storage/*`
+
+Do not immediately start coding. First form a concrete understanding of the current pipeline and identify the smallest coherent set of changes needed.
+
+## Desired architecture
+
+The conceptual pipeline should become:
+
+```text
+event
+  ↓
+persist + dedup
+  ↓
+deterministic filters
+  ↓
+decision model
+  ↓
+structured semantic judgment
+  ↓
+deterministic policy
+  ↓
+ignore | notify | act | delegate
+                         ↓
+                  generative agent
+                         ↓
+                  structured result
+                         ↓
+                    new mrmr event
+                         ↓
+                    decision model
+                         ↓
+                       policy
+```
+
+The important point is that the agent is not the root of the system.
+
+mrmr is the root runtime.
+
+The agent is one possible effect of a policy decision.
+
+Also preserve the distinction between:
+
+- **decision**: bounded judgment about what is happening
+- **investigation/work**: open-ended but scoped task execution
+- **authority**: deterministic runtime policy deciding what is allowed
+
+## Change 1: add a first-class decision-model provider abstraction
+
+mrmr currently supports OpenAI-compatible structured generation and TypeSafe Jev.
+
+Refactor or extend the model layer so that decision models are a first-class concept rather than being treated as just another text-generation backend.
+
+The system should be able to represent questions such as:
+
+- Choice
+- Yes/No
+- Score
+
+A decision provider should return normalized typed results that policy can address consistently.
+
+Design a provider interface clean enough that the following backends could exist:
+
+- TypeSafe Jev
+- Liquid d1
+- future local decision-model implementations
+
+Do not necessarily implement every provider if API details are unavailable, but create the correct abstraction and implement at least one local/OpenAI-compatible path if feasible.
+
+If Liquid d1 exposes an OpenAI-compatible or known API that can be implemented cleanly from available information in the repo or public docs already referenced in comments/config, support it. Otherwise create a clearly separated provider interface plus a `liquid-d1` configuration shape and leave the transport as a documented TODO rather than inventing an API.
+
+The key architectural requirement is that policy consumes **normalized decision results**, not backend-specific response shapes.
+
+For example, a normalized choice should conceptually expose fields such as:
+
+```json
+{
+  "choice": "needs_investigation",
+  "probabilities": {
+    "routine": 0.03,
+    "resolved": 0.02,
+    "needs_investigation": 0.92,
+    "immediate_attention": 0.03
+  },
+  "confidence": 0.92
+}
+```
+
+Do not assume confidence and probability are universally identical. Preserve backend-native data when useful, but provide a stable normalized surface.
+
+## Change 2: explicitly separate "judge" models from "worker" models
+
+Configuration should make the distinction obvious.
+
+Something conceptually like:
+
+```yaml
+models:
+  judge:
+    role: decision
+    provider: ...
+    model: ...
+
+  worker:
+    role: agent
+    provider: openai-compatible
+    base_url: ...
+    model: LFM2.5-2.6B
+```
+
+Exact naming is up to you if a better schema fits the current design.
+
+The interpreter stage should use a decision-capable model.
+
+Delegated work should target an agent/worker endpoint.
+
+Avoid over-engineering model routing at this stage.
+
+## Change 3: make delegated agent completion able to re-enter mrmr as an event
+
+This is the most important behavioral change.
+
+Today, README states:
+
+> Agent completion does not automatically return as a new event.
+
+Add an explicit, safe mechanism for a delegated agent result to become a new mrmr event.
+
+This must not create an unconstrained agent loop.
+
+Design it as an **event loop driven by externally completed work**, not an LLM self-loop.
+
+Conceptually:
+
+```text
+delegate
+  ↓
+agent endpoint
+  ↓
+agent returns structured completion
+  ↓
+mrmr emits:
+agent.completed
+  ↓
+normal ingestion pipeline
+```
+
+The returned event should contain enough provenance to trace:
+
+- originating event ID
+- delegation target
+- causal depth
+- agent result
+- completion status
+- optional structured evidence
+- optional proposed next action
+- timestamps if available
+
+Reuse the existing causal-depth protection.
+
+Keep the existing maximum depth guard or improve it if needed.
+
+Agent completion re-entry must be explicitly configurable, for example:
+
+```yaml
+delegate:
+  agent: homelab
+  prompt: "Investigate this event."
+  emit_completion: true
+  completion_event_type: agent.investigation.completed
+```
+
+Do not make every delegation automatically recursive by default.
+
+Default behavior should remain safe.
+
+## Change 4: support read-only investigation patterns cleanly
+
+mrmr should make it natural to delegate bounded investigation without granting the model mutation authority.
+
+The runtime does not need to implement an entire tool framework.
+
+Instead, formalize the contract between mrmr and an external agent endpoint.
+
+The request should include:
+
+- event
+- decision
+- task/prompt
+- delegation metadata
+- permissions or capability hints if configured
+
+The response should ideally be structured.
+
+Design a completion schema such as:
+
+```json
+{
+  "status": "completed",
+  "summary": "...",
+  "findings": [...],
+  "evidence": [...],
+  "recommended_action": "...",
+  "metadata": {}
+}
+```
+
+Do not require every field if that would make the adapter brittle.
+
+Preserve compatibility with simple HTTP 2xx "accepted" agent endpoints if possible.
+
+If necessary, support two modes:
+
+- fire-and-forget
+- synchronous structured completion
+
+Prefer an incremental design over replacing the current delegate adapter wholesale.
+
+## Change 5: strengthen the event provenance model
+
+Ambient systems need excellent traceability.
+
+Every model-driven or agent-generated event should be inspectable.
+
+Add or formalize provenance fields so the runtime can reconstruct:
+
+```text
+source event
+  ↓
+decision
+  ↓
+policy rule
+  ↓
+delegation
+  ↓
+agent completion
+  ↓
+follow-up decision
+  ↓
+effect
+```
+
+Avoid duplicating large payloads unnecessarily.
+
+Use IDs/references where practical.
+
+Make sure `mrmr inspect` remains useful.
+
+If there is a natural place, enhance trace output to show parent/child relationships.
+
+## Change 6: preserve deterministic authority
+
+Do not let model output directly define:
+
+- arbitrary URLs
+- shell commands
+- new permissions
+- new adapters
+- arbitrary tool names
+- executable HTTP destinations
+
+Models may return semantic values like:
+
+```text
+recommended_action = restart_service
+```
+
+but policy/configuration must map that to an allowed predefined effect.
+
+Example:
+
+```yaml
+policy:
+  - if:
+      result.remediation.choice: restart_candidate
+      result.remediation.confidence: "> 0.9"
+    then:
+      action:
+        type: http
+        target: restart-plex
+```
+
+The model should never return the actual target URL.
+
+Keep mrmr's existing safety posture intact.
+
+## Change 7: add a realistic ambient-AI example
+
+Add a complete example recipe for a homelab investigation workflow.
+
+For example:
+
+```text
+systemd/journal event
+  ↓
+decision model:
+routine | resolved | needs_investigation | urgent | unclear
+  ↓
+policy
+  ↓
+delegate read-only homelab investigator
+  ↓
+agent completion event
+  ↓
+decision model:
+no_action | notify | remediation_candidate | insufficient_evidence
+  ↓
+policy
+```
+
+Add configuration and documentation showing the full loop.
+
+Name it something like:
+
+```text
+recipes/homelab-ambient/
+```
+
+or extend the existing homelab journal recipe if that is cleaner.
+
+Use shadow mode by default for all consequential effects.
+
+## Change 8: evaluation support
+
+The project already has evaluation and human labels.
+
+Extend evaluation so decision-model workflows can be evaluated separately from generative structured-output workflows.
+
+Useful metrics include:
+
+- overall accuracy
+- per-class precision/recall if practical
+- false-ignore rate
+- calibration-oriented buckets if probabilities are present
+- confusion matrix if easy to implement cleanly
+
+Do not build a giant ML evaluation framework.
+
+Keep it pragmatic.
+
+The most important metric for ambient triage is still false-ignore rate.
+
+If agent-completion follow-up decisions are introduced, make them evaluable as ordinary events.
+
+## Change 9: documentation language
+
+Update the README to make mrmr's architecture explicit.
+
+The core positioning should be approximately:
+
+> mrmr is a local-first, event-driven runtime for ambient AI.
+
+> Most AI systems begin with a user prompt. mrmr begins with an event.
+
+> Decision models provide cheap semantic judgment. Generative agents wake only when useful work is warranted.
+
+> The runtime, not the model, owns authority.
+
+Clarify that "ambient" does NOT mean continuously running a generative LLM.
+
+Instead:
+
+```text
+ordinary software observes
+→ cheap semantic judgment
+→ most events disappear
+→ a minority trigger useful work
+```
+
+Also explain the difference between:
+
+- event-driven ambient runtime
+- traditional user-driven chatbot/agent
+- unconstrained autonomous agent loop
+
+Document the new re-entry behavior carefully.
+
+## Change 10: preserve compatibility and keep scope controlled
+
+Do not rewrite mrmr from scratch.
+
+Prefer additive/refactoring changes.
+
+Existing behavior should continue to work where reasonable.
+
+Do not introduce:
+
+- a message broker
+- Kubernetes
+- a distributed queue
+- a generic workflow language
+- a full MCP client
+- a web UI
+- an embedded autonomous coding agent
+- an arbitrary shell executor
+
+Those may come later.
+
+This change should focus on the architecture:
+
+```text
+observe
+→ judge
+→ policy
+→ optionally investigate
+→ observe the result
+→ judge again
+```
+
+## Tests
+
+Add meaningful tests for:
+
+1. normalized decision-model results
+2. decision provider failure → safe ignore behavior
+3. delegate fire-and-forget remains supported
+4. synchronous agent completion can emit a follow-up event
+5. causal-depth protection prevents infinite re-entry
+6. follow-up event provenance is persisted correctly
+7. model output cannot introduce arbitrary executable targets
+8. shadow mode still suppresses side effects
+9. existing OpenAI-compatible interpreter behavior is not unintentionally broken
+
+Run the full test suite.
+
+Fix regressions you introduce.
+
+## Deliverables
+
+Make the changes directly in the repository.
+
+When complete, give me:
+
+1. a concise architecture summary
+2. the files changed
+3. important design decisions
+4. anything intentionally deferred
+5. example configuration showing:
+   - decision model
+   - worker/agent
+   - delegation
+   - agent completion re-entry
+   - follow-up decision
+6. test results
+7. any migration notes for existing configs
+
+Do not merely produce a plan. Inspect the code, implement the changes, test them, and leave the repository in a coherent state.
+
+Favor small, composable abstractions over framework-building.
+
+---
+
+i think at this point, it's time to run this. 
+
+marvin is the homelab, journald monitor. i want d1-3b running on deepthought (note, you will need to investigate deepthought, it's running vllm with qwen flash next currently, we may need to make a decision on this one). 
+
+let's work
+
+---
+
+ok what i'd actually like to investigate nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-NVFP4 from huggingface alongside d1
+
+---
+
+ok let's do it
+
+---
+
+can you build me a super interactive html file for this setup? also does the readme of mrmr need to be updated?
