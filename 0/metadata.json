@@ -1,0 +1,106 @@
+{
+  "cli_version": "0.11.4",
+  "checkpoint_id": "01M5TTJPDJKWT5HB2XGT9T7RVA",
+  "session_id": "01a160a9-1177-750c-b132-9f3b4e80ed86",
+  "strategy": "manual-commit",
+  "created_at": "2026-10-26T00:43:15.418214Z",
+  "branch": "main",
+  "checkpoints_count": 2,
+  "save_step_count": 2,
+  "files_touched": [
+    "IMPLEMENTATION.md",
+    "README.md"
+  ],
+  "agent": "Pi",
+  "model": "gpt-6-astra",
+  "turn_id": "9171034e511d",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 60461,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 126080,
+    "output_tokens": 2876,
+    "api_call_count": 9
+  },
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-10-26T00:43:15.409084Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 8,
+    "human_removed": 10,
+    "total_committed": 0,
+    "total_lines_changed": 18,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 1903,
+      "user_lines_removed": 8,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.json": 90,
+        ".codex/hooks.json": 88,
+        ".impeccable/design.json": 257,
+        ".impeccable/review/detector.json": 62,
+        ".impeccable/review/documentation.md": 7,
+        ".impeccable/review/finish.md": 36,
+        ".impeccable/review/tests.json": 140,
+        ".impeccable/surfaces/wiki-setup-html.md": 24,
+        ".pi/extensions/entire/index.ts": 147,
+        ".pi/settings.json": 5,
+        "DESIGN.md": 169,
+        "IMPLEMENTATION.md": 4,
+        "PRODUCT.md": 44,
+        "README.md": 6,
+        "wiki/01-runtime.md": 87,
+        "wiki/02-models.md": 89,
+        "wiki/03-services.md": 94,
+        "wiki/04-validation.md": 63,
+        "wiki/05-operations.md": 100,
+        "wiki/06-next-steps.md": 55,
+        "wiki/README.md": 39,
+        "wiki/setup.html": 297
+      },
+      "user_removed_per_file": {
+        "IMPLEMENTATION.md": 4,
+        "README.md": 4
+      }
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 1893,
+      "user_lines_removed": 0,
+      "agent_lines_added": 10,
+      "agent_lines_removed": 8,
+      "user_added_per_file": {
+        ".claude/settings.json": 90,
+        ".codex/hooks.json": 88,
+        ".impeccable/design.json": 257,
+        ".impeccable/review/detector.json": 62,
+        ".impeccable/review/documentation.md": 7,
+        ".impeccable/review/finish.md": 36,
+        ".impeccable/review/tests.json": 140,
+        ".impeccable/surfaces/wiki-setup-html.md": 24,
+        ".pi/extensions/entire/index.ts": 147,
+        ".pi/settings.json": 5,
+        "DESIGN.md": 169,
+        "PRODUCT.md": 44,
+        "wiki/01-runtime.md": 87,
+        "wiki/02-models.md": 89,
+        "wiki/03-services.md": 94,
+        "wiki/04-validation.md": 63,
+        "wiki/05-operations.md": 100,
+        "wiki/06-next-steps.md": 55,
+        "wiki/README.md": 39,
+        "wiki/setup.html": 297
+      }
+    }
+  ]
+}
