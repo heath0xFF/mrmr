@@ -1,0 +1,45 @@
+open this project in sidelit
+
+---
+
+ok last time we worked on this we had talked about expanding the dataset? should we look at the shadow logs now and see how things are?
+
+---
+
+how only 33 events? can you scp the logs over so i can read here?
+
+---
+
+what is this "apt-daily-upgrade.service"?
+
+---
+
+is mrmr still running? i think what would be good for a next bit of value here is some sort of dashboard
+
+---
+
+is mrmr still running? i think what would be good for a next bit of value here is some sort of dashboard. because i have no visibility into what's happening on marvin
+
+---
+
+is mrmr still running? i think what would be good for a next bit of value here is some sort of dashboard. because i have no visibility into what's happening on marvin in regard to mrmr
+
+---
+
+yeah and i'd like to log latency from d1.
+
+---
+
+yes deploy to marvin now.
+
+---
+
+lol dawg it's running on my mac? 127.0.0.1 is this machine
+
+---
+
+ohhhhh dude what
+
+---
+
+ok so let's do that, and then i'd like for you to please use impeccable to get the dashboard lookin' real nice.
