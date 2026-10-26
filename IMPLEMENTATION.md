@@ -1001,6 +1001,28 @@ must not stay valid until someone cleans the queue next week.
 
 # Local web UI
 
+## Implemented read-only slice
+
+The Go binary serves `/dashboard/` with live read-only endpoints. It shows
+source-poll health, configured collection scope, event search and inspection,
+shadow policy boundaries, repeated messages, and model request latency.
+Decision latency remains in SQLite; payload-free timing logs cover every source.
+Median/p95 use successful decisions in a bounded recent window; failures are
+reported separately. Client request time is not GPU-only inference time.
+
+Dashboard socket access is loopback-only, including when the ingestion listener
+binds more broadly. Remote access uses an SSH tunnel or private Tailscale Serve.
+Optional `server.dashboard_addr` and `server.dashboard_host` settings add a
+separate loopback-only, read-only listener and one exact trusted proxy hostname.
+The proxy must target this listener, never the event-ingestion listener. Existing
+tailnet permissions control remote access; forwarded headers grant no authority.
+The dashboard cannot change configuration, labels, effects, or services. Poll
+health is process-local; the browser shows stale data on refresh failure. This
+is visibility, not independent monitoring.
+The flow editor, connection manager, and control surfaces below remain future work.
+
+## Design direction
+
 mrmr should ship with a local web interface.
 
 The first version should avoid becoming an enormous visual-programming IDE.
@@ -1506,10 +1528,10 @@ v0.1 is Phase 0 plus durability — nothing more:
 - golden-set gate: ≥50 labeled real events run through the interpreter with
   measured accuracy and false-ignore rate before any flow is called done
 
-Explicitly moved out of v0.1 into their phases: Discord/Telegram adapters,
-cron + poller sources, exec actions, permissions/approval queue, web UI,
-flow editor. The phased list above is authoritative; this section no longer
-duplicates it with a broader scope.
+Still deferred: Telegram and other notification adapters beyond stdout/Discord,
+cron, exec actions, permissions/approval queues, and a flow editor. HTTP polling,
+Linux system-unit journals, Discord notifications, and the read-only runtime
+dashboard have been implemented through the requested slices documented above.
 
 ---
 

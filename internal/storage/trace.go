@@ -6,6 +6,7 @@
 package storage
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -49,7 +50,11 @@ func (d *DB) InsertTrace(eventID string, steps []event.TraceStep) error {
 
 // EventTrace returns one event's trace in pipeline order.
 func (d *DB) EventTrace(eventID string) ([]event.TraceStep, error) {
-	rows, err := d.Query(`SELECT at, stage, msg FROM event_traces WHERE event_id = ? ORDER BY seq`, eventID)
+	return d.eventTrace(context.Background(), eventID)
+}
+
+func (d *DB) eventTrace(ctx context.Context, eventID string) ([]event.TraceStep, error) {
+	rows, err := d.QueryContext(ctx, `SELECT at, stage, msg FROM event_traces WHERE event_id = ? ORDER BY seq`, eventID)
 	if err != nil {
 		return nil, fmt.Errorf("read trace %s: %w", eventID, err)
 	}
@@ -78,15 +83,20 @@ func (d *DB) EventTrace(eventID string) ([]event.TraceStep, error) {
 // callers can inspect again after completion. No query holds the sole database
 // connection while another query needs it.
 func (d *DB) Inspect(eventID string) (*Inspection, error) {
+	return d.InspectContext(context.Background(), eventID)
+}
+
+// InspectContext lets HTTP readers cancel work without changing the CLI contract.
+func (d *DB) InspectContext(ctx context.Context, eventID string) (*Inspection, error) {
 	var (
 		id, typ, source, subject, eventTime    string
 		dataJSON, metadataJSON, provenanceJSON sql.NullString
 		depth                                  int
 	)
-	err := d.QueryRow(`SELECT id, type, source, subject, event_time, data, metadata, depth, provenance FROM events WHERE id = ?`, eventID).
+	err := d.QueryRowContext(ctx, `SELECT id, type, source, subject, event_time, data, metadata, depth, provenance FROM events WHERE id = ?`, eventID).
 		Scan(&id, &typ, &source, &subject, &eventTime, &dataJSON, &metadataJSON, &depth, &provenanceJSON)
 	if err == sql.ErrNoRows {
-		return nil, fmt.Errorf("event %s not found", eventID)
+		return nil, fmt.Errorf("event %s not found: %w", eventID, sql.ErrNoRows)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("read event %s: %w", eventID, err)
@@ -97,19 +107,19 @@ func (d *DB) Inspect(eventID string) (*Inspection, error) {
 	}
 	ins := &Inspection{Event: e}
 
-	if ins.Decisions, err = d.eventDecisions(eventID); err != nil {
+	if ins.Decisions, err = d.eventDecisions(ctx, eventID); err != nil {
 		return nil, err
 	}
-	if ins.Executions, err = d.eventExecutions(eventID); err != nil {
+	if ins.Executions, err = d.eventExecutions(ctx, eventID); err != nil {
 		return nil, err
 	}
-	if ins.Trace, err = d.EventTrace(eventID); err != nil {
+	if ins.Trace, err = d.eventTrace(ctx, eventID); err != nil {
 		return nil, err
 	}
-	if ins.Label, err = d.eventLabel(eventID); err != nil {
+	if ins.Label, err = d.eventLabel(ctx, eventID); err != nil {
 		return nil, err
 	}
-	rows, err := d.Query(`SELECT id FROM events WHERE json_extract(provenance, '$.parent_event_id') = ? ORDER BY ingest_time, id`, eventID)
+	rows, err := d.QueryContext(ctx, `SELECT id FROM events WHERE json_extract(provenance, '$.parent_event_id') = ? ORDER BY ingest_time, id`, eventID)
 	if err != nil {
 		return nil, fmt.Errorf("read child events: %w", err)
 	}
@@ -127,8 +137,8 @@ func (d *DB) Inspect(eventID string) (*Inspection, error) {
 	return ins, nil
 }
 
-func (d *DB) eventDecisions(eventID string) ([]event.Decision, error) {
-	rows, err := d.Query(`SELECT id, interpreter, model, status, result, latency_ms, error
+func (d *DB) eventDecisions(ctx context.Context, eventID string) ([]event.Decision, error) {
+	rows, err := d.QueryContext(ctx, `SELECT id, interpreter, model, status, result, latency_ms, error
 		FROM decisions WHERE event_id = ? ORDER BY created_at, id`, eventID)
 	if err != nil {
 		return nil, fmt.Errorf("read decisions for %s: %w", eventID, err)
@@ -156,8 +166,8 @@ func (d *DB) eventDecisions(eventID string) ([]event.Decision, error) {
 	return out, nil
 }
 
-func (d *DB) eventExecutions(eventID string) ([]Execution, error) {
-	rows, err := d.Query(`SELECT id, decision_id, outcome, adapter, status, error, created_at, policy_rule, policy_hash
+func (d *DB) eventExecutions(ctx context.Context, eventID string) ([]Execution, error) {
+	rows, err := d.QueryContext(ctx, `SELECT id, decision_id, outcome, adapter, status, error, created_at, policy_rule, policy_hash
 		FROM executions WHERE event_id = ? ORDER BY created_at, id`, eventID)
 	if err != nil {
 		return nil, fmt.Errorf("read executions for %s: %w", eventID, err)
@@ -186,12 +196,12 @@ func (d *DB) eventExecutions(eventID string) ([]Execution, error) {
 	return out, nil
 }
 
-func (d *DB) eventLabel(eventID string) (*EventLabel, error) {
+func (d *DB) eventLabel(ctx context.Context, eventID string) (*EventLabel, error) {
 	var (
 		category, expectedOutcome, labeledAt string
 		requiresAction                       bool
 	)
-	err := d.QueryRow(`SELECT category, requires_action, expected_outcome, labeled_at
+	err := d.QueryRowContext(ctx, `SELECT category, requires_action, expected_outcome, labeled_at
 		FROM event_labels WHERE event_id = ?`, eventID).
 		Scan(&category, &requiresAction, &expectedOutcome, &labeledAt)
 	if err == sql.ErrNoRows {

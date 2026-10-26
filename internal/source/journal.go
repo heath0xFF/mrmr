@@ -108,7 +108,9 @@ func (j *Journal) Run(ctx context.Context, rt *mruntime.Runtime) {
 	}
 }
 
-func (j *Journal) poll(ctx context.Context, rt *mruntime.Runtime) error {
+func (j *Journal) poll(ctx context.Context, rt *mruntime.Runtime) (err error) {
+	rt.StartPoll(j.cfg.Name)
+	defer func() { rt.FinishPoll(j.cfg.Name, err) }()
 	cursor, err := rt.DB.Cursor(j.cfg.Name)
 	if err != nil {
 		return err

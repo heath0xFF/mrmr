@@ -88,9 +88,10 @@ mrmr is early-stage software with a working vertical slice, HTTP polling, and a 
 | Policy | ANDed conditions, first-match rules, explicit default |
 | Outcomes | Ignore, stdout/Discord notify, HTTP action, emit-event, HTTP delegation with opt-in structured completion events, shadow |
 | Review | Parent/child inspection, labels/export, decision vs structured-output evaluation, confusion, precision/recall, probability buckets, false-ignore rate |
+| Dashboard | Private read-only activity, source-poll health, policy boundaries, event traces, and model request latency |
 | Connections | Standalone Superhuman OAuth login and read-only connection check; email polling is not implemented yet |
 
-**Not implemented:** MCP polling or tool calls, native SaaS integrations, built-in cron, XML RSS parsing, Discord/Telegram adapters, exec actions, permission/approval queues, web UI, multiple independently routed flows, or hot reload.
+**Not implemented:** MCP polling or tool calls, native SaaS integrations, built-in cron, XML RSS parsing, Telegram and other notification adapters beyond stdout/Discord, exec actions, permission/approval queues, a flow/configuration editor, multiple independently routed flows, or hot reload.
 
 The included 50-event evaluation set is generated. The required quality gate—at least 50 labeled **real** events, with measured accuracy and false-ignore rate—has not yet been completed. A passing test suite is not evidence that a model is ready to make judgments on your events.
 
@@ -109,7 +110,7 @@ The runbook covers environment checks, safe configuration, a real-model smoke te
 You need:
 
 - **Go 1.27**, as declared in [go.mod](go.mod).
-- Either an **OpenAI-compatible model endpoint** exposing `/chat/completions`, or a TypeSafe API account for Jev. The shipped quick-start config uses OpenAI-compatible inference. Any hosted endpoint receives the event content sent for interpretation.
+- A decision endpoint: **OpenAI-compatible** `/chat/completions`, **native System One** (such as local d1), or a TypeSafe account for Jev. The shipped quick-start config uses OpenAI-compatible inference. For local d1 on CPU or CUDA BF16, start with the [local d1 recipe](recipes/local-d1/README.md). Any hosted endpoint receives the event content sent for interpretation.
 
 Build and configure:
 
@@ -129,6 +130,10 @@ Then start the runtime:
 ```bash
 ./mrmr run -config mrmr.yaml
 ```
+
+Open **http://localhost:4242/dashboard/** to view source health, stored events,
+shadow outcomes, and model request latency. For a remote runtime, use
+[private HTTPS through Tailscale Serve](#private-https-with-tailscale-serve).
 
 In another terminal, send an event:
 
@@ -467,7 +472,7 @@ The [complete shadow-mode example](recipes/homelab-journal/mrmr.example.yaml) in
 
 - Requires Linux, `journalctl` with `--lines=+N` support, and system-journal read permission. Startup checks these prerequisites before starting any sources. HTTP-only configurations remain portable.
 - Selects exact **system** units and priorities at or above the chosen severity: `emerg`, `alert`, `crit`, `err`, `warning`, `notice`, `info`, or `debug`. No unit globs, user-unit support, remote journals, or automatic historical backfill. Hermes running as a user service is outside this initial slice. System services that run as a regular UID are supported: their records can reside in per-user journal files. Trusted unit fields, not file ownership, enforce selection.
-- First activation checkpoints the current system-journal tail without interpreting history. Later starts resume the SQLite cursor. Changing the unit selection does not replay old records.
+- First activation checkpoints the current accessible journal tail without interpreting history. Later starts resume the SQLite cursor. Changing the unit selection does not replay old records.
 - Scans at most **100 accessible journal records per tick**, oldest first, applying unit/severity checks before ingestion. Unselected records advance the checkpoint without becoming Events. Busy journals can lag; shorten `every` (minimum `1s`) if needed. Each journalctl process is bounded to 15 seconds and 4 MiB stdout, and is reaped before model calls.
 - Persists selected Events with the unit as `subject`, the original journal timestamp, and `data.unit`, numeric `data.priority`, and `data.message`. Manager-emitted service transitions are recognized through PID 1's `UNIT` field. Binary/oversized journal fields are marked `message_omitted`; text is capped at 4096 bytes with `message_truncated` when necessary. Other journal fields are not copied into event data.
 - Uses the journal's opaque cursor as `metadata.source_event_id`. Failed batches retain the checkpoint; already stored records deduplicate. This does not repair the runtime's partial-processing/crash-recovery limitations.
@@ -476,6 +481,108 @@ The [complete shadow-mode example](recipes/homelab-journal/mrmr.example.yaml) in
 **Permissions:** run `journalctl --system --no-pager -n 1 -o json --output-fields=__CURSOR` as the same account that runs mrmr. If access is denied or journalctl warns, have an administrator grant appropriate read access (often membership in `systemd-journal` or `adm`), then restart the login/service session. Group membership grants broad journal visibility: ask before changing it. Do not run mrmr as root to bypass this check. A host with no readable journal entries also fails startup rather than pretending the source works.
 
 Journal content may contain credentials or private application data. Unit filtering is not secret redaction. Start with shadow, use an approved model endpoint, and review selected records before trusting this source. Avoid selecting mrmr's own unit; the adapter excludes its current process's journal messages to prevent immediate feedback.
+
+## Read-only dashboard
+
+With `mrmr run` active, open **http://localhost:4242/dashboard/** (use your configured port).
+The HTML, CSS, and JavaScript are embedded in the Go binary. Local access needs
+no frontend service, build tool, external asset, or extra configuration.
+The page names the runtime host and works on desktop and phone screens.
+It cannot change labels, configuration, policy, or services.
+
+The dashboard requires a loopback peer and a local Host header by default,
+even when the ingestion listener binds more broadly. Proxy headers do not
+bypass this check. Do not expose or proxy the unauthenticated ingestion API.
+
+### Private HTTPS with Tailscale Serve
+
+For everyday remote access without an SSH tunnel, use **Tailscale Serve**.
+Configure a separate read-only listener in the same process. Replace the hostname with your node's exact
+Tailscale DNS name; both settings are required:
+
+```yaml
+server:
+  addr: 127.0.0.1:4242
+  dashboard_addr: 127.0.0.1:4244
+  dashboard_host: your-host.your-tailnet.ts.net
+```
+
+`dashboard_addr` must use a literal loopback IP and a nonzero port.
+`dashboard_host` adds one exact hostname to the Host allowlist; it does not
+permit remote socket peers, arbitrary proxy headers, or cross-origin reads.
+Restart mrmr after changing configuration. On that same host, inspect existing
+Serve routes, then add only the dashboard route:
+
+```sh
+tailscale serve status
+tailscale serve --bg --set-path=/dashboard/ http://127.0.0.1:4244/dashboard/
+# Open https://your-host.your-tailnet.ts.net/dashboard/
+```
+
+Keep existing routes intact. Never enable Funnel. The second listener has no
+event-ingestion routes, even if a proxy rewrites paths. Access follows existing
+tailnet permissions for the node's HTTPS port; the dashboard adds no separate
+sign-in. Restrict those permissions if other tailnet users must not read events.
+
+Once configured, open the HTTPS URL from a device connected to your tailnet.
+mrmr and SQLite stay on the server; the browser is only a read-only view.
+
+### SSH tunnel alternative
+
+For temporary remote access without Serve, keep the ingestion listener on
+loopback and forward it through SSH:
+
+```sh
+ssh -N -L 127.0.0.1:14242:127.0.0.1:4242 YOUR_HOST
+# Open http://127.0.0.1:14242/dashboard/
+```
+
+Keep the SSH session running while you use the page. If you configured the
+separate read-only listener above, forward port `4244` instead of `4242`.
+
+### What the dashboard shows
+
+The page refreshes every 10 seconds while visible and shows:
+- Runtime response timestamp and process start time, with a stale-data warning on failure.
+- Source scope and the current process's last started, finished, and successful poll.
+  Empty successful polls count. Cursor age alone is not a health signal. Polls
+  that exceed three intervals (at least 30 seconds) are marked overdue, not dead.
+  A source can complete a batch while individual model calls fail.
+- Searchable events in 50-row pages, with separate decision and execution states,
+  unlabeled/error/shadow filters, and full event inspection.
+- Exact repeated messages in the latest 1,000 events, without classifying them
+  as harmless. Summary messages are shortened after redaction.
+- Configured policy conditions and shadow boundaries, without effect arguments.
+
+**Latency:** every Decision already stores `latency_ms` in SQLite, including
+failures. A payload-free service log now records that timing for API and source
+events alike. It sums client-side model requests across attempts, including
+network/server time but excluding retry waits and the rest of the pipeline.
+It is **not GPU-only inference time**. The dashboard groups the latest 1,000
+Decisions across all models by interpreter and exact model identity. Median and
+p95 use successful Decisions only, with nearest-rank percentiles. Failures remain
+visible separately; timeout counts use recorded timeout/deadline error text and
+count Decisions, not attempts. Historical records work without replay or new
+model calls. No samples means unknown, not zero.
+
+The latest recorded success does not prove that a model is reachable now.
+Poll health resets on process restart; historical poll failures are not stored
+by this view. A dashboard served by mrmr cannot independently alert when mrmr
+is down.
+
+Read endpoints: `GET /dashboard/api/overview`,
+`GET /dashboard/api/events?q=TEXT&view=all&offset=0`, and
+`GET /dashboard/api/event?id=EVENT_ID`. Views are `all`, `unlabeled`,
+`shadow`, `ignore`, and `errors`. Queries have a five-second context deadline;
+responses are capped at 4 MiB. Event detail includes `event_json`, a redacted
+display string that preserves large JSON numbers without browser rounding.
+These routes never ingest events, call models, write labels, or execute effects.
+
+All responses disable caching. URLs, common credential fields, and configured
+secret values are redacted. Arbitrary event text can still contain private
+information: this is not a public-safe export. Keep host, tailnet, and tunnel access private.
+The upgrade adds two transactional indexes for recent-event and decision queries;
+it does not rewrite events or change policy. Back up SQLite before upgrading.
 
 ## Inspect, label, and evaluate
 
@@ -574,11 +681,13 @@ verified; offline tests do not establish it.
 - **Persistence is not crash recovery.** There is no queue replay for half-processed events. Execution intent is stored before effects; failures to store intent suppress the effect. A crash can leave a pending execution, lose a completion before it is stored, or leave a partial trace. Pending work is not automatically retried. Deduplication is not an exactly-once execution guarantee.
 - **Polling is deliberately basic.** No general pagination, arbitrary cursor ordering, or durable ingestion retry queue. Slow interpretation delays the next record in that source.
 - **Stored data can be sensitive.** Events, structured decisions, and traces persist in SQLite; API processing also prints response traces. Full prompts and successful raw model responses are not stored as separate artifacts. Endpoint HTTP error bodies are discarded; HTTP error traces contain status codes only. This does not remove sensitive material already stored or logged by older versions. Protect the database, logs, and exports.
-- **Secrets belong outside config.** Use `api_key_env` for model authentication and `bearer_token_env` for pollers. Do not put credentials in URLs, event payloads, or prompts.
+- **Secrets belong outside config.** Use `api_key_env` for model authentication, `bearer_token_env` for pollers, and `webhook_env` for Discord notifications. Do not put credentials in URLs, event payloads, or prompts.
 
 ## Deployment
 
 The runtime is one Go binary plus a YAML file and SQLite database. No Redis, Postgres, or cloud account is required.
+
+Model serving is separate from mrmr. The [local d1 recipe](recipes/local-d1/README.md) covers native CPU and CUDA-BF16 decisions; the [homelab ambient recipe](recipes/homelab-ambient/README.md) shows separate decision/worker roles and shadowed policy. A generative model endpoint alone is not an investigator task endpoint: an external harness must implement the agent contract and enforce tool limits. Keep notification and delegation rules shadowed until real-event evaluation supports promotion.
 
 For a Linux x86-64 host:
 

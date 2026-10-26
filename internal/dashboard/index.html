@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>mrmr · Activity</title>
+  <link rel="stylesheet" href="/dashboard/dashboard.css">
+  <script src="/dashboard/dashboard.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#activity">Skip to events</a>
+  <header class="masthead">
+    <div class="identity"><a class="brand" href="/dashboard/">mrmr</a><span id="host-name" class="host-name">Connecting to runtime</span></div>
+    <nav aria-label="Dashboard sections"><a href="#activity">Activity</a><a href="#latency">Latency</a><a href="#sources-title">Sources</a></nav>
+    <span class="readonly">Read-only</span>
+  </header>
+  <main>
+    <div class="page-heading">
+      <div><h1>Activity</h1><p>Source events, model judgments, and the outcomes they selected.</p></div>
+      <button id="refresh" class="refresh-button" type="button"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20 7v5h-5M4 17v-5h5M5.2 7a8 8 0 0 1 13.6-1L20 8M4 16l1.2 2A8 8 0 0 0 18.8 17"/></svg>Refresh now</button>
+    </div>
+    <div id="connection" class="connection" role="status">Connecting to the runtime…</div>
+    <noscript><p class="warning">JavaScript is required to read live runtime data. Use <code>mrmr events</code> or <code>mrmr inspect</code> from the terminal instead.</p></noscript>
+    <div id="totals" class="totals">Waiting for stored event counts.</div>
+    <p id="source-status" class="source-status">Waiting for source-poll evidence.</p>
+    <div class="workspace">
+      <div class="primary">
+        <section id="latency" class="latency-section" aria-labelledby="latency-title">
+          <div class="section-heading"><h2 id="latency-title">Model request latency</h2><span>Client-side · milliseconds</span></div>
+          <div class="table-scroll" role="region" aria-label="Model latency" tabindex="0">
+            <table class="timings" role="table"><caption id="latency-window">Waiting for model history.</caption><thead><tr><th scope="col">Model</th><th scope="col">Median</th><th scope="col">p95</th><th scope="col">OK / total</th><th scope="col">Errors</th><th scope="col">Timeouts</th></tr></thead><tbody id="timings-body"></tbody></table>
+          </div>
+          <div id="model-evidence" class="evidence"></div>
+          <details class="measurement-note"><summary>How latency is measured</summary><p>Client-side time, summed across attempts. Includes network and server work; excludes retry waits. Not GPU-only inference time. Percentiles use successful decisions only, with the nearest-rank method.</p><p>Timeouts are failed decisions whose recorded error names a timeout or expired deadline, not individual retry counts. Model history is not a live model-health check.</p></details>
+        </section>
+        <section id="activity" aria-labelledby="activity-title">
+          <div class="section-heading"><h2 id="activity-title">Events</h2><span>Newest received first</span></div>
+          <form id="search-form" class="search-controls" role="search">
+            <div class="search-field"><label for="query">Search events</label><input id="query" name="q" type="search" maxlength="200" placeholder="Message, service, source, or ID"></div>
+            <div class="view-field"><label for="view">Show</label><select id="view" name="view"><option value="all">All events</option><option value="unlabeled">Unlabeled</option><option value="shadow">Shadow outcomes</option><option value="ignore">Ignored</option><option value="errors">Errors / invalid</option></select></div>
+            <button class="primary-button" type="submit">Search</button>
+          </form>
+          <p id="event-status" class="help" role="status">Loading events…</p>
+          <section id="detail" class="detail" aria-labelledby="detail-title" tabindex="-1" hidden>
+            <div class="section-heading"><h3 id="detail-title">Event detail</h3><button id="close-detail" type="button">Close detail</button></div>
+            <p id="detail-status" class="help" role="status"></p><div id="detail-content"></div>
+            <button id="refresh-detail" type="button">Refresh this event</button>
+          </section>
+          <div class="table-scroll timeline-scroll" role="region" aria-label="Event timeline; scroll for more events" tabindex="0">
+            <table class="events" role="table"><caption class="sr-only">Stored events and their latest decision and execution</caption><thead><tr><th scope="col">Received</th><th scope="col">Event / message</th><th scope="col">Outcome</th><th scope="col">Latency</th></tr></thead><tbody id="events-body"></tbody></table>
+          </div>
+          <div class="pagination"><button id="previous" type="button" disabled>Previous 50</button><span id="page-label">No page loaded</span><button id="next" type="button" disabled>Next 50</button></div>
+        </section>
+      </div>
+      <aside aria-label="Runtime and collection scope">
+        <section aria-labelledby="sources-title"><h2 id="sources-title">Watching</h2><div id="sources"><p>No source data yet.</p></div><p class="help">A completed source poll does not mean every model call succeeded.</p></section>
+        <section aria-labelledby="policy-title"><h2 id="policy-title">Effect boundaries</h2><p id="policy-summary">Checking active policy…</p><div id="policy"></div><p id="filters" class="help"></p></section>
+        <section aria-labelledby="repeats-title"><h2 id="repeats-title">Repeated messages</h2><p class="help">Exact matches in the latest 1,000 events. Repetition does not mean harmless.</p><div id="repeats"></div></section>
+        <section aria-labelledby="runtime-title"><h2 id="runtime-title">Runtime</h2><p id="runtime-evidence">No live evidence yet.</p><p class="help">A successful refresh proves the runtime answered. An old model success does not prove it is reachable now.</p></section>
+      </aside>
+    </div>
+    <footer><strong>Visibility, not control.</strong> No labels, settings, or effects can be changed here. URLs, common credential fields, and configured secrets are redacted. Event text can still be private; this is not a public-safe export.</footer>
+  </main>
+</body>
+</html>

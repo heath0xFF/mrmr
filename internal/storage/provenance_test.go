@@ -52,7 +52,7 @@ func TestLineageMigrationIsTransactional(t *testing.T) {
 	// Apply to a deliberately conflicting shape: the depth ALTER succeeds,
 	// then provenance fails. Rollback must remove depth and preserve old rows.
 	if _, err := db.Exec(`DROP INDEX idx_events_parent; ALTER TABLE events DROP COLUMN depth;
- DELETE FROM schema_migrations WHERE version = 7;`); err != nil {
+ DELETE FROM schema_migrations WHERE version >= 7;`); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.migrate(); err == nil {

@@ -10,9 +10,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"net"
 	"net/url"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -26,6 +28,10 @@ import (
 
 type Server struct {
 	Addr string `yaml:"addr"`
+	// A proxy gets a separate read-only listener, never the ingestion mux.
+	// Both fields are explicit so a wildcard bind cannot expose stored events.
+	DashboardAddr string `yaml:"dashboard_addr"`
+	DashboardHost string `yaml:"dashboard_host"`
 }
 
 type DB struct {
@@ -56,6 +62,7 @@ type Source struct {
 // A destination secret must be a literal environment reference, not a URL
 // or model template that could change the adapter's authority.
 var environmentName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+var dashboardDNSLabel = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
 
 // Exact names only: no patterns, journalctl options, paths, or user-unit
 // selectors. This intentionally accepts a conservative subset of systemd
@@ -199,6 +206,22 @@ func (c *Config) validateInterpretation() error {
 }
 
 func (c *Config) Validate() error {
+	if c.Server.DashboardAddr != "" || c.Server.DashboardHost != "" {
+		host, port, err := net.SplitHostPort(c.Server.DashboardAddr)
+		p, portErr := strconv.Atoi(port)
+		if err != nil || !net.ParseIP(host).IsLoopback() || portErr != nil || p < 1 || p > 65535 {
+			return fmt.Errorf("config: server.dashboard_addr must be a literal loopback address and port")
+		}
+		name := c.Server.DashboardHost
+		if len(name) == 0 || len(name) > 253 {
+			return fmt.Errorf("config: server.dashboard_host requires an exact proxy hostname")
+		}
+		for _, label := range strings.Split(name, ".") {
+			if !dashboardDNSLabel.MatchString(label) {
+				return fmt.Errorf("config: server.dashboard_host must be a lowercase DNS hostname without port or wildcard")
+			}
+		}
+	}
 	for name, mc := range c.Models {
 		if mc.Role != "" && mc.Role != "decision" && mc.Role != "agent" {
 			return fmt.Errorf("config: model %q: role must be decision or agent", name)

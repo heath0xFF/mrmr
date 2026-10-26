@@ -30,8 +30,8 @@ import (
 	"github.com/heath0xff/mrmr/internal/storage"
 )
 
-// Runtime is the assembled pipeline. It is immutable after construction:
-// the config that built it is the config it runs, which is what lets
+// Runtime is the assembled pipeline. Its configuration is immutable after
+// construction: the config that built it is the config it runs, which lets
 // in-flight events finish under the rules they started with.
 type Runtime struct {
 	DB        *storage.DB
@@ -50,7 +50,8 @@ type Runtime struct {
 	Agents          map[string]agent.Config
 	// HTTP supplies effect transport. Actions and Discord notifications use
 	// a 10s bound; agents apply their configured bounded timeout separately.
-	HTTP *http.Client
+	HTTP  *http.Client
+	polls pollHealth
 }
 
 // maxDepth caps emit-event recursion: a causal chain longer than this is a
@@ -190,6 +191,9 @@ func (r *Runtime) ingest(ctx context.Context, e event.Event, t *[]TraceStep) (*R
 	if serr := r.DB.InsertDecision(*dec); serr != nil {
 		return nil, fmt.Errorf("persist decision: %w", serr)
 	}
+	// Journal events do not pass through the HTTP response logger. Record the
+	// same timing for every decision without prompts, payloads, or endpoint URLs.
+	log.Printf("mrmr: decision event_id=%s interpreter=%q status=%s latency_ms=%d", dec.EventID, dec.Interpreter, dec.Status, dec.LatencyMs)
 
 	// Fail toward ignore: invalid or errored decisions never reach policy.
 	// A model that is down or wrong must not be able to trigger actions —

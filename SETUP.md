@@ -24,7 +24,7 @@ Ask only for missing information:
 
 If credentials are needed, ask the user to supply them through their environment or approved secret store, not chat. Record only the environment variable name and whether it is set. mrmr does not automatically load `.env` files.
 
-**Stop rather than invent support.** Native MCP polling, provider-specific webhook normalization, XML RSS parsing, approval queues, and a web UI are not implemented. Explain the limitation and offer an existing ingestion path; do not build a bridge without a separate request.
+**Stop rather than invent support.** Native MCP polling, provider-specific webhook normalization, XML RSS parsing, approval queues, and a web configuration editor are not implemented. Explain the limitation and offer an existing ingestion path; do not build a bridge without a separate request.
 
 ## 2. Prepare an isolated candidate
 
@@ -159,6 +159,17 @@ For Linux system-journal ingestion, use the [built-in source and shadow example]
 For API ingestion, the caller must send normalized events and supply stable `metadata.source_event_id` values. mrmr does not verify provider webhook signatures on their behalf.
 
 Once the user has approved the final configuration and data access, start it temporarily and verify a representative authorized event reaches the intended filter/interpreter/policy path, remains shadowed (or ignored), and is inspectable in the final database. For a poller, verify its first fetch and a repeated poll without duplicate interpretation. If no representative event is available, report source verification as pending rather than claiming it works.
+
+### Read-only visibility
+
+The running binary serves a [read-only dashboard](README.md#read-only-dashboard)
+at `/dashboard/`. Keep the existing loopback listener. For remote access, use an
+SSH tunnel or the separate read-only listener behind private Tailscale Serve
+(described in the README). Never proxy the ingestion port or enable Funnel.
+The dashboard does not require a second service or model calls.
+Verify source-poll timestamps, decision errors, latency, and shadow execution
+states. Do not treat an old model success or a quiet event stream as proof of
+current model health. The dashboard cannot change labels, policy, or services.
 
 ### Optional ambient investigation setup
 

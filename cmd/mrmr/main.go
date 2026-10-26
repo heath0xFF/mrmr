@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/heath0xff/mrmr/internal/config"
+	"github.com/heath0xff/mrmr/internal/dashboard"
 	"github.com/heath0xff/mrmr/internal/event"
 	"github.com/heath0xff/mrmr/internal/model"
 	"github.com/heath0xff/mrmr/internal/runtime"
@@ -115,6 +116,12 @@ func run(args []string) error {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/events", eventsHandler(rt))
+	// Dashboard requests cannot call Ingest. Its handler independently enforces
+	// loopback access even when the existing ingestion listener binds broadly.
+	view := dashboard.New(rt, cfg)
+	mux.Handle("/dashboard/", view)
+	mux.Handle("/dashboard", view)
+	mux.Handle("GET /{$}", view)
 
 	srv := &http.Server{Addr: cfg.Server.Addr, Handler: mux}
 
@@ -136,6 +143,19 @@ func run(args []string) error {
 	}
 	defer listener.Close()
 	defer srv.Close()
+	servers, listeners := []*http.Server{srv}, []net.Listener{listener}
+	if cfg.Server.DashboardAddr != "" {
+		// Never hand a reverse proxy the ingestion mux. This second socket is
+		// still in the same process, but its only handler has no write routes.
+		readListener, err := net.Listen("tcp", cfg.Server.DashboardAddr)
+		if err != nil {
+			return fmt.Errorf("listen for dashboard: %w", err)
+		}
+		defer readListener.Close()
+		readServer := &http.Server{Handler: view, ReadHeaderTimeout: 5 * time.Second, WriteTimeout: 10 * time.Second, IdleTimeout: time.Minute}
+		defer readServer.Close()
+		servers, listeners = append(servers, readServer), append(listeners, readListener)
+	}
 
 	// Every exit path cancels and joins sources before closing SQLite,
 	// including a server failure. Each adapter bounds its own I/O lifetime.
@@ -152,8 +172,20 @@ func run(args []string) error {
 		}()
 	}
 
-	errCh := make(chan error, 1)
-	go func() { errCh <- srv.Serve(listener) }()
+	errCh := make(chan error, len(servers))
+	var serving sync.WaitGroup
+	for i, server := range servers {
+		serving.Add(1)
+		go func() { defer serving.Done(); errCh <- server.Serve(listeners[i]) }()
+	}
+	// Closing and joining both servers also covers partial startup and errors;
+	// no serving goroutine may outlive the database it reads.
+	defer func() {
+		for _, server := range servers {
+			server.Close()
+		}
+		serving.Wait()
+	}()
 
 	log.Printf("mrmr listening on %s (db: %s, model: %s, sources: %d)", cfg.Server.Addr, cfg.DB.Path, cfg.Interpret.Model, len(cfg.Sources))
 
@@ -167,8 +199,10 @@ func run(args []string) error {
 	// itself also respects ctx via the request context.
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := srv.Shutdown(shutdownCtx); err != nil {
-		return fmt.Errorf("shutdown: %w", err)
+	for _, server := range servers {
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			return fmt.Errorf("shutdown: %w", err)
+		}
 	}
 	return nil
 }

@@ -85,13 +85,15 @@ func (p *HTTPPoller) Run(ctx context.Context, rt *runtime.Runtime) {
 // poll is one fetch-normalize-ingest cycle. Every error path is a log line,
 // never a crash: a broken feed must not take down the runtime, and the next
 // tick retries anyway.
-func (p *HTTPPoller) poll(ctx context.Context, rt *runtime.Runtime) {
+func (p *HTTPPoller) poll(ctx context.Context, rt *runtime.Runtime) (pollErr error) {
+	rt.StartPoll(p.cfg.Name)
+	defer func() { rt.FinishPoll(p.cfg.Name, pollErr) }()
 	// If the fetch itself is canceled by shutdown, nothing was ingested and
 	// the cursor is unchanged — safe to abandon mid-flight.
 	items, err := p.fetch(ctx, rt.DB)
 	if err != nil {
 		log.Printf("mrmr: poll %s: fetch failed: %v", p.cfg.Name, err)
-		return
+		return err
 	}
 
 	var ingested, dups, cursorAdvanced int
@@ -99,7 +101,7 @@ func (p *HTTPPoller) poll(ctx context.Context, rt *runtime.Runtime) {
 	newCursor := ""
 	for i, item := range items {
 		if ctx.Err() != nil {
-			return // shutdown: remaining items wait for the next poll
+			return ctx.Err() // shutdown: remaining items wait for the next poll
 		}
 		obj, ok := item.(map[string]any)
 		if !ok {
@@ -137,8 +139,11 @@ func (p *HTTPPoller) poll(ctx context.Context, rt *runtime.Runtime) {
 	// source is corrected. Check cancellation here too: the last Ingest can
 	// record a canceled model call as ignore without returning an error.
 	// This protects fetching, not recovery of already-persisted partial work.
-	if complete && ctx.Err() == nil && newCursor != "" && newCursor != p.cursor(rt.DB) {
+	if complete && ctx.Err() == nil && newCursor != "" {
+		// Rewriting an unchanged watermark is safe; a failed cursor read must
+		// never masquerade as a healthy poll or silently reset the fetch window.
 		if err := rt.DB.SetCursor(p.cfg.Name, newCursor); err != nil {
+			complete = false
 			log.Printf("mrmr: poll %s: persist cursor failed: %v", p.cfg.Name, err)
 		} else {
 			cursorAdvanced = 1
@@ -146,14 +151,25 @@ func (p *HTTPPoller) poll(ctx context.Context, rt *runtime.Runtime) {
 	}
 	log.Printf("mrmr: poll %s: %d items: %d new, %d duplicate, cursor=%s",
 		p.cfg.Name, len(items), ingested, dups, map[bool]string{true: newCursor, false: "unchanged"}[cursorAdvanced == 1])
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if !complete {
+		return fmt.Errorf("incomplete source batch")
+	}
+	return nil
 }
 
 // fetch retrieves and extracts the item array. The cursor is substituted
 // into the URL template when present so cursor-based APIs page correctly;
 // plain feeds ignore it.
 func (p *HTTPPoller) fetch(ctx context.Context, db *storage.DB) ([]any, error) {
+	cursor, err := db.Cursor(p.cfg.Name)
+	if err != nil {
+		return nil, fmt.Errorf("read source cursor: %w", err)
+	}
 	var urlBuf bytes.Buffer
-	if err := p.urlTpl.Execute(&urlBuf, map[string]any{"cursor": p.cursor(db)}); err != nil {
+	if err := p.urlTpl.Execute(&urlBuf, map[string]any{"cursor": cursor}); err != nil {
 		return nil, fmt.Errorf("render url: %w", err)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, urlBuf.String(), nil)
@@ -252,16 +268,6 @@ func cursorValue(item map[string]any, field string) string {
 	// Share the storage identity rule: null/objects/arrays must not turn
 	// into synthetic IDs that collapse unrelated records or advance cursors.
 	return event.SourceEventID(item[field])
-}
-
-// cursor reads the persisted watermark. An unknown source is a fresh poller:
-// empty cursor, and the URL template renders without one.
-func (p *HTTPPoller) cursor(db *storage.DB) string {
-	c, err := db.Cursor(p.cfg.Name)
-	if err != nil {
-		log.Printf("mrmr: poll %s: read cursor: %v", p.cfg.Name, err)
-	}
-	return c
 }
 
 // bearerFromEnv resolves the bearer_token_env reference at startup.

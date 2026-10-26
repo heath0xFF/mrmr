@@ -177,6 +177,10 @@ CREATE INDEX idx_events_parent ON events(json_extract(provenance, '$.parent_even
 ALTER TABLE executions ADD COLUMN policy_rule TEXT NOT NULL DEFAULT '';
 ALTER TABLE executions ADD COLUMN policy_hash TEXT NOT NULL DEFAULT '';
 `,
+	`
+CREATE INDEX idx_events_ingest ON events(ingest_time, id);
+CREATE INDEX idx_decisions_created ON decisions(created_at, id);
+`,
 }
 
 func (d *DB) migrate() error {
