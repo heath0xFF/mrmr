@@ -1,0 +1,41 @@
+{
+  "cli_version": "0.11.4",
+  "checkpoint_id": "01M5V151CPDGCERMS5F5E15NQ7",
+  "session_id": "01a160a9-1177-750c-b132-9f3b4e80ed86",
+  "strategy": "manual-commit",
+  "created_at": "2026-10-26T02:38:08.233815Z",
+  "branch": "main",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "IMPLEMENTATION.md",
+    "README.md"
+  ],
+  "agent": "Pi",
+  "model": "gpt-6-astra",
+  "turn_id": "9171034e511d",
+  "checkpoint_transcript_start": 27,
+  "transcript_lines_at_start": 27,
+  "compact_transcript_start": 11,
+  "token_usage": {
+    "input_tokens": 0,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 0,
+    "output_tokens": 0,
+    "api_call_count": 0
+  },
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-10-26T02:38:08.221203Z",
+    "agent_lines": 108,
+    "agent_removed": 8,
+    "human_added": 1914,
+    "human_modified": 12,
+    "human_removed": 0,
+    "total_committed": 2034,
+    "total_lines_changed": 2081,
+    "agent_percentage": 5.57424315233061,
+    "metric_version": 2
+  }
+}
