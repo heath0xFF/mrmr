@@ -9,6 +9,12 @@ const state = {
   session: 0,
   eventsGeneration: 0,
   token: "",
+  // True once the runtime has accepted this page. With Tailscale identity there
+  // is no token, so "has a token" can no longer stand for "is unlocked".
+  unlocked: false,
+  // Access came from the proxy rather than a typed token. Lock would be
+  // meaningless here because a reload lets the same person straight back in.
+  ambient: false,
   config: null,
   dirty: false,
   before: "",
@@ -48,7 +54,7 @@ async function api(path, body) {
       cache: "no-store",
       signal: controller.signal,
       headers: {
-        Authorization: `Bearer ${state.token}`,
+        ...(state.token ? { Authorization: `Bearer ${state.token}` } : {}),
         ...(body === undefined
           ? {}
           : { "Content-Type": "application/json", "X-Mrmr-Control": "1" }),
@@ -57,8 +63,13 @@ async function api(path, body) {
     });
     if (session !== state.session) throw Error("Management session changed.");
     if (response.status === 401) {
+      const ambient = state.ambient;
       lock();
-      throw Error("Operator token rejected. Unlock again.");
+      throw Error(
+        ambient
+          ? "Your Tailscale login is no longer accepted. Use the operator token."
+          : "Operator token rejected. Unlock again.",
+      );
     }
     if (!response.ok) throw Error((await response.text()).slice(0, 1000));
     const value = await response.json();
@@ -90,6 +101,8 @@ function action(id, fn) {
 function lock() {
   state.session++;
   state.token = "";
+  state.unlocked = false;
+  state.ambient = false;
   state.detailGeneration++;
   clearTimeout(state.timer);
   $("app").hidden = true;
@@ -165,7 +178,7 @@ function page() {
 // Reports used to stay blank until a Refresh click, which read as "nothing here".
 // Load each page's records on arrival instead.
 function loadPage() {
-  if (!state.token) return;
+  if (!state.unlocked) return;
   const name = location.hash.slice(1);
   const load =
     name === "runtime"
@@ -182,27 +195,55 @@ window.addEventListener("hashchange", () => {
   loadPage();
 });
 page();
+async function enter() {
+  state.unlocked = true;
+  await loadConfig();
+  $("login").hidden = true;
+  $("app").hidden = false;
+  $("logout").hidden = state.ambient;
+  document.body.classList.remove("locked");
+  await overview();
+  await events();
+  const id = new URLSearchParams(location.search).get("event");
+  if (id) await detail(id);
+  notice("");
+  loadPage();
+}
 $("login-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   state.session++;
   state.token = $("token").value;
   $("token").value = "";
   try {
-    await loadConfig();
-    $("login").hidden = true;
-    $("app").hidden = false;
-    $("logout").hidden = false;
-    document.body.classList.remove("locked");
-    await overview();
-    await events();
-    const id = new URLSearchParams(location.search).get("event");
-    if (id) await detail(id);
-    notice("");
-    loadPage();
+    await enter();
   } catch (err) {
     fail(err.message);
   }
 });
+// Ask before showing the token form: behind Tailscale Serve the runtime may
+// already know who this is. The form stays hidden meanwhile so it does not flash.
+// Any failure, including 401 on localhost or an SSH tunnel, falls back to the form.
+(async () => {
+  const session = state.session;
+  $("login").hidden = true;
+  let accepted = false;
+  try {
+    const probe = await fetch("/manage/api/state", { cache: "no-store" });
+    accepted = probe.ok;
+  } catch {}
+  // Someone may have submitted the form during the probe; their session wins.
+  if (session !== state.session) return;
+  if (!accepted) {
+    $("login").hidden = false;
+    return;
+  }
+  state.ambient = true;
+  try {
+    await enter();
+  } catch (err) {
+    fail(err.message);
+  }
+})();
 $("logout").addEventListener("click", lock);
 function record(title, text) {
   const n = el("div");
@@ -354,7 +395,7 @@ function renderGate(blocked) {
 }
 async function overview() {
   clearTimeout(state.timer);
-  if (!state.token) return;
+  if (!state.unlocked) return;
   try {
     if (!state.config || state.config.setup) {
       $("overview-title").textContent = "Setup required";
@@ -394,7 +435,7 @@ async function overview() {
   } catch (err) {
     // Lock rejects in-flight requests on purpose. That is not a runtime failure,
     // and writing here would repopulate a page Lock just cleared.
-    if (!state.token) return;
+    if (!state.unlocked) return;
     $("overview-title").textContent = "The runtime is not answering";
     $("overview-title").dataset.tone = "stop";
     $("overview-sentence").textContent =
@@ -402,14 +443,14 @@ async function overview() {
     $("freshness").textContent = "Status refresh failed.";
     fail(err.message);
   } finally {
-    if (state.token && !document.hidden)
+    if (state.unlocked && !document.hidden)
       state.timer = setTimeout(overview, 10000);
   }
 }
 action("refresh-overview", overview);
 document.addEventListener("visibilitychange", () => {
   clearTimeout(state.timer);
-  if (!document.hidden && state.token) overview();
+  if (!document.hidden && state.unlocked) overview();
   else
     $("freshness").textContent =
       "Refresh paused while this page is hidden; displayed evidence may be stale.";
@@ -447,7 +488,7 @@ function restoreSearch() {
 }
 restoreSearch();
 async function events() {
-  if (!state.token || state.config?.setup) return;
+  if (!state.unlocked || state.config?.setup) return;
   const generation = ++state.eventsGeneration;
   const params = new URLSearchParams({
     q: $("query").value.trim(),
@@ -527,7 +568,7 @@ action("next", async () => {
 async function detail(id) {
   const generation = ++state.detailGeneration;
   const data = await api(`/dashboard/api/event?id=${encodeURIComponent(id)}`);
-  if (generation !== state.detailGeneration || !state.token) return;
+  if (generation !== state.detailGeneration || !state.unlocked) return;
   const root = $("event-detail"),
     e = data.event;
   for (const row of document.querySelectorAll("#events tr[data-event-id]"))
@@ -618,7 +659,7 @@ async function detail(id) {
 window.addEventListener("popstate", () => {
   restoreSearch();
   page();
-  if (state.token) {
+  if (state.unlocked) {
     events().catch((e) => fail(e.message));
     const id = new URLSearchParams(location.search).get("event");
     if (id) detail(id).catch((e) => fail(e.message));

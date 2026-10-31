@@ -572,6 +572,12 @@ For an existing installation:
 mrmr run -config mrmr.yaml -control-addr 127.0.0.1:4243
 ```
 
+Behind Tailscale Serve, `-control-tailscale-user you@github` lets those tailnet
+logins open the page with no token. Serve supplies the login, and only requests to
+`-control-host` honour it. Any process on the same machine can reach the loopback
+listener and forge that header, so use this only on a host where you accept that.
+The token stays required at startup and is still what localhost and SSH tunnels use.
+
 Open **http://localhost:4243/manage/** and enter that token. The page keeps it
 only in memory, not browser storage or a cookie. Reloading requires unlocking
 again. `Lock` clears the editor and event evidence. Use HTTPS when accessing a
@@ -596,6 +602,7 @@ variable. Token rotation requires a restart; never commit the token.
 | `-config` | `mrmr.yaml` | Startup YAML and the file replaced on activation |
 | `-control-addr` | Disabled | Literal loopback IP and nonzero port for management |
 | `-control-host` | Empty | One exact lowercase private proxy hostname, without a scheme, path, or port |
+| `-control-tailscale-user` | Empty | Comma-separated tailnet logins allowed to manage without the token through Tailscale Serve on `-control-host` |
 | `-control-token-env` | `MRMR_CONTROL_TOKEN` | Environment variable containing the operator token |
 | `-setup` | `false` | Allow protected setup when the configuration file is absent; requires management |
 | `-setup-db` | `mrmr.db` | Database path used only for first-run setup |

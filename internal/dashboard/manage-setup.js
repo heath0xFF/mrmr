@@ -212,7 +212,7 @@ async function saveDiscordConnection() {
     $("setup-webhook-result").textContent =
       "Connection saved. No message sent. Running monitor rules are unchanged.";
   } catch (error) {
-    if (state.token && state.config) {
+    if (state.unlocked && state.config) {
       try {
         await refreshDiscordConnections();
       } catch {}

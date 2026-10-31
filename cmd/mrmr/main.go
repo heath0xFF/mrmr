@@ -88,6 +88,7 @@ func run(args []string) error {
 	configPath := fs.String("config", "mrmr.yaml", "path to config file")
 	controlAddr := fs.String("control-addr", "", "optional loopback management listener, e.g. 127.0.0.1:4243")
 	controlHost := fs.String("control-host", "", "exact private HTTPS proxy hostname for management")
+	controlTailscaleUsers := fs.String("control-tailscale-user", "", "comma-separated tailnet logins allowed to manage without the token through Tailscale Serve on -control-host")
 	controlTokenEnv := fs.String("control-token-env", "MRMR_CONTROL_TOKEN", "environment variable containing a random management token (32+ bytes)")
 	setup := fs.Bool("setup", false, "start management only when configuration is missing; requires -control-addr")
 	setupDB := fs.String("setup-db", "mrmr.db", "database path for first-run setup")
@@ -96,7 +97,7 @@ func run(args []string) error {
 	}
 
 	if *controlAddr != "" {
-		return runManaged(*configPath, *controlAddr, *controlHost, *controlTokenEnv, *setup, *setupDB)
+		return runManaged(*configPath, *controlAddr, *controlHost, *controlTailscaleUsers, *controlTokenEnv, *setup, *setupDB)
 	}
 	if *setup {
 		return fmt.Errorf("-setup requires -control-addr")

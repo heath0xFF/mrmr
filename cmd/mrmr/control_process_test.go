@@ -25,7 +25,7 @@ func TestManagedProcessHelper(t *testing.T) {
 	if os.Getenv("MRMR_TEST_MANAGED_CHILD") != "1" {
 		t.Skip("subprocess helper")
 	}
-	if err := runManaged(os.Getenv("MRMR_TEST_CONFIG"), os.Getenv("MRMR_TEST_ADDR"), "", "MRMR_TEST_CONTROL_TOKEN", false, ""); err != nil {
+	if err := runManaged(os.Getenv("MRMR_TEST_CONFIG"), os.Getenv("MRMR_TEST_ADDR"), "", "", "MRMR_TEST_CONTROL_TOKEN", false, ""); err != nil {
 		t.Fatal(err)
 	}
 }

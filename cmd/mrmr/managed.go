@@ -52,14 +52,17 @@ type manager struct {
 	blocked   atomic.Bool
 	// Only one operator mutation or activation may proceed at a time. Reads
 	// stay available while a source drains or a model evaluation is running.
-	op          sync.Mutex
-	token       [32]byte
-	host        string
-	stopSources chan struct{}
-	sources     sync.WaitGroup
-	evalMu      sync.Mutex
-	evalCancel  context.CancelFunc
-	evalWG      sync.WaitGroup
+	op    sync.Mutex
+	token [32]byte
+	host  string
+	// Tailnet logins allowed to manage without the token. Empty means the feature
+	// is off, so an unconfigured runtime never trusts an identity header.
+	tailscaleUsers map[string]bool
+	stopSources    chan struct{}
+	sources        sync.WaitGroup
+	evalMu         sync.Mutex
+	evalCancel     context.CancelFunc
+	evalWG         sync.WaitGroup
 }
 
 func revision(text string) string {
@@ -67,7 +70,7 @@ func revision(text string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func runManaged(path, addr, host, tokenEnv string, setup bool, setupDB string) error {
+func runManaged(path, addr, host, tailscaleUsers, tokenEnv string, setup bool, setupDB string) error {
 	ip, port, err := net.SplitHostPort(addr)
 	portNumber, portErr := strconv.Atoi(port)
 	if err != nil || portErr != nil || portNumber < 1 || portNumber > 65535 || net.ParseIP(ip) == nil || !net.ParseIP(ip).IsLoopback() {
@@ -77,6 +80,10 @@ func runManaged(path, addr, host, tokenEnv string, setup bool, setupDB string) e
 		if strings.ContainsAny(host, "/:@ \\?#") || strings.ToLower(host) != host {
 			return fmt.Errorf("control-host must be an exact lowercase hostname")
 		}
+	}
+	users, err := parseTailscaleUsers(tailscaleUsers, host)
+	if err != nil {
+		return err
 	}
 	token := os.Getenv(tokenEnv)
 	if len(token) < 32 {
@@ -125,7 +132,7 @@ func runManaged(path, addr, host, tokenEnv string, setup bool, setupDB string) e
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	credentials := notify.DefaultDiscordCredentials()
-	m := &manager{ctx: ctx, db: db, path: path, bootstrap: cfg, discord: credentials, host: host, token: sha256.Sum256([]byte(token))}
+	m := &manager{ctx: ctx, db: db, path: path, bootstrap: cfg, discord: credentials, host: host, tailscaleUsers: users, token: sha256.Sum256([]byte(token))}
 	blocked, err := db.EffectsBlocked()
 	if err != nil {
 		return err
@@ -293,7 +300,8 @@ func (m *manager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// or service logs. An explicit header prevents ambient browser authority.
 	auth := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 	hash := sha256.Sum256([]byte(auth))
-	if !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") || subtle.ConstantTimeCompare(hash[:], m.token[:]) != 1 {
+	tokenOK := strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") && subtle.ConstantTimeCompare(hash[:], m.token[:]) == 1
+	if !tokenOK && !m.tailscaleIdentityOK(r, host) {
 		http.Error(w, "Operator token required.", 401)
 		return
 	}
@@ -336,6 +344,46 @@ func (m *manager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err := m.route(w, r); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 	}
+}
+
+// parseTailscaleUsers validates the -control-tailscale-user list. It needs a
+// control host because identity is only honoured on that exact proxy hostname.
+func parseTailscaleUsers(list, host string) (map[string]bool, error) {
+	if list == "" {
+		return nil, nil
+	}
+	if host == "" {
+		return nil, fmt.Errorf("control-tailscale-user requires control-host")
+	}
+	users := map[string]bool{}
+	for _, login := range strings.Split(list, ",") {
+		login = strings.TrimSpace(login)
+		if login == "" || strings.ContainsAny(login, " \t\r\n") {
+			return nil, fmt.Errorf("control-tailscale-user must be a comma-separated list of tailnet logins")
+		}
+		users[login] = true
+	}
+	return users, nil
+}
+
+// tailscaleIdentityOK reports whether Tailscale Serve vouched for an allowed user.
+//
+// Serve replaces any client-supplied Tailscale-User-Login header and omits it for
+// tagged devices, so a tailnet peer cannot claim someone else's login. The header
+// is only as trustworthy as that proxy: a process on this machine can reach the
+// loopback listener and forge it. That is an accepted limit of this mode, which is
+// why it is opt-in and limited to the proxy hostname, never localhost.
+//
+// Unlike the token, this authority is ambient: the browser does not choose to send
+// it. The Host, Origin, Sec-Fetch-Site, X-Mrmr-Control, and JSON content-type
+// checks in ServeHTTP are what keep another site from using it.
+func (m *manager) tailscaleIdentityOK(r *http.Request, host string) bool {
+	if len(m.tailscaleUsers) == 0 || m.host == "" || host != m.host {
+		return false
+	}
+	// More than one value means something other than Serve touched the header.
+	logins := r.Header.Values("Tailscale-User-Login")
+	return len(logins) == 1 && m.tailscaleUsers[logins[0]]
 }
 
 func decodeControl(w http.ResponseWriter, r *http.Request, v any) error {
