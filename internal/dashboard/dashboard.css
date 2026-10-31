@@ -165,6 +165,11 @@ details {
   text-align: right;
   white-space: nowrap;
 }
+.events td.empty:last-child {
+  width: auto;
+  text-align: center;
+  white-space: normal;
+}
 .event-open {
   display: block;
   font-weight: 650;

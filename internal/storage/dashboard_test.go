@@ -193,3 +193,30 @@ func TestDashboardWindowAndIndexMigration(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// Shadow and pending rows must not count as sending: the status page turns this
+// evidence into a green lamp, so only a real adapter attempt may contribute.
+func TestDashboardDeliveredCountsOnlyRealAttempts(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+	for i, status := range []string{"shadow", "pending", "ok", "error"} {
+		id := dashboardEvent(t, db, i)
+		if err := db.InsertExecution("exe_"+id, id, "", "notify", "discord", status, ""); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(`UPDATE executions SET created_at=? WHERE id=?`, fmt.Sprintf("2026-01-01T00:00:0%dZ", i), "exe_"+id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s, err := db.DashboardSummary(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(s.Delivered) != 1 {
+		t.Fatalf("delivered = %+v", s.Delivered)
+	}
+	d := s.Delivered[0]
+	if d.Sent != 1 || d.LastStatus != "error" || d.LastSent != "2026-01-01T00:00:02Z" {
+		t.Fatalf("delivery = %+v", d)
+	}
+}

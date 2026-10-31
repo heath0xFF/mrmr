@@ -273,3 +273,45 @@ func TestDashboardInputAndStorageErrors(t *testing.T) {
 		t.Fatalf("unsafe storage error: %d %s", w.Code, w.Body.String())
 	}
 }
+
+// Live lines are not stored, but they are still event text from another program.
+// They must get the same redaction as stored events before reaching a browser.
+func TestDashboardLiveRedactsAndBounds(t *testing.T) {
+	h, rt := testDashboard(t)
+	rt.StartPoll("journal")
+	rt.RecordPoll("journal", runtime.PollCounts{Scanned: 9, Watched: 1})
+	rt.FinishPoll("journal", nil)
+	rt.RecordSeen("journal", runtime.SeenRecord{Unit: "example.service", Priority: 6, Message: "fetch https://private.invalid/a?token=private-token " + strings.Repeat("x", 500)})
+	w := request(h, "GET", "/dashboard/api/live")
+	if w.Code != 200 {
+		t.Fatalf("%d %s", w.Code, w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), "private.invalid") || strings.Contains(w.Body.String(), "private-token") {
+		t.Fatal("live line leaked private text")
+	}
+	var data struct {
+		Sources []struct {
+			Name   string `json:"name"`
+			Health struct {
+				Scanned int `json:"scanned"`
+			} `json:"health"`
+			Recent []struct {
+				Message string `json:"message"`
+			} `json:"recent"`
+		} `json:"sources"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &data); err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range data.Sources {
+		if s.Recent == nil {
+			t.Fatalf("%s: recent must be an array", s.Name)
+		}
+		if s.Name == "journal" && (s.Health.Scanned != 9 || len(s.Recent) != 1 || len([]rune(s.Recent[0].Message)) > 241) {
+			t.Fatalf("journal = %+v", s)
+		}
+	}
+	if request(h, "POST", "/dashboard/api/live").Code != 405 {
+		t.Fatal("live view must be read-only")
+	}
+}

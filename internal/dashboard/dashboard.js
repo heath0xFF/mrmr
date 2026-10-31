@@ -229,6 +229,13 @@ function renderEvents(page) {
   $('previous').disabled = state.offset === 0;
   $('next').disabled = !page.more || state.offset >= 100000;
 }
+const liveView = Signal.liveLoop($('live-sources'), async () => {
+  // Abort a stalled read so a hung request cannot silently freeze the live view.
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 4000);
+  try { return await get('live', controller.signal); } finally { clearTimeout(timeout); }
+}, () => true);
+liveView.start();
 async function refresh() {
   clearTimeout(state.timer);
   state.controller?.abort();

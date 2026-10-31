@@ -39,6 +39,18 @@ type sourceView struct {
 	Paused    bool               `json:"paused"`
 }
 
+// liveSourceView is what the watchers have read since this Runtime started.
+type liveSourceView struct {
+	Name     string               `json:"name"`
+	Type     string               `json:"type"`
+	EveryMs  int64                `json:"every_ms"`
+	Units    []string             `json:"units"`
+	Priority string               `json:"priority"`
+	Paused   bool                 `json:"paused"`
+	Health   runtime.PollHealth   `json:"health"`
+	Recent   []runtime.SeenRecord `json:"recent"`
+}
+
 // modelView excludes endpoint URLs and credential references from the browser.
 type modelView struct {
 	Name     string `json:"name"`
@@ -162,7 +174,11 @@ func New(rt *runtime.Runtime, cfg *config.Config) http.Handler {
 			// Shorten summaries only AFTER redaction. A SQL substring can cut a
 			// credential in half and defeat exact-value redaction at this boundary.
 			object := doc.(map[string]any)
-			if r.URL.Path == "/dashboard/api/events" {
+			if r.URL.Path == "/dashboard/api/live" {
+				for _, source := range object["sources"].([]any) {
+					shortenMessages(source.(map[string]any)["recent"])
+				}
+			} else if r.URL.Path == "/dashboard/api/events" {
 				shortenMessages(object["events"])
 			} else if r.URL.Path == "/dashboard/api/overview" {
 				shortenMessages(object["summary"].(map[string]any)["repeats"])
@@ -195,6 +211,14 @@ func New(rt *runtime.Runtime, cfg *config.Config) http.Handler {
 				sources = append(sources, sourceView{s.Name, s.Type, s.EventType, s.Every.Milliseconds(), s.Scope, s.Units, s.Priority, rt.PollHealth(s.Name), s.Paused})
 			}
 			send(map[string]any{"at": time.Now().UTC(), "started_at": started, "hostname": hostname, "summary": summary, "sources": sources, "policy": rules, "filter_count": len(cfg.Filter), "models": models, "interpreter": cfg.Interpret.Model, "interpret_overrides": overrides, "monitor_interpreters": monitorInterpreters, "config_revision": rt.ConfigRevision, "effects_blocked": rt.EffectsBlocked != nil && rt.EffectsBlocked()}, err)
+		case "/dashboard/api/live":
+			// Memory only, so polling every few seconds costs no SQLite work. Lines
+			// pass through send, which applies the same redaction as stored events.
+			sources := []liveSourceView{}
+			for _, s := range cfg.Sources {
+				sources = append(sources, liveSourceView{s.Name, s.Type, s.Every.Milliseconds(), s.Units, s.Priority, s.Paused, rt.PollHealth(s.Name), rt.RecentSeen(s.Name)})
+			}
+			send(map[string]any{"at": time.Now().UTC(), "started_at": started, "sources": sources}, nil)
 		case "/dashboard/api/events":
 			q := r.URL.Query()
 			offset := 0

@@ -118,13 +118,22 @@ const Signal = (() => {
     // Configured, not observed. A green lamp here would present YAML as evidence.
     return { state: "set", detail: `${plural(count, "rule")} + default` };
   }
-  function effectStage(rules, data) {
+  function effectStage(source, rules, data) {
     const effects = rules.filter((r) => r.outcome !== "ignore"),
       live = effects.filter((r) => !r.shadow).length;
     if (data.effects_blocked)
       return { state: "stop", detail: "Blocked by safety gate" };
-    if (live)
-      return { state: "clear", detail: `Live, ${plural(live, "rule")}` };
+    if (live) {
+      // A live rule is configuration. Green needs a stored send from this source.
+      const sent = (data.summary.delivered || []).find(
+        (d) => d.source === source.name,
+      );
+      if (sent?.last_status === "error")
+        return { state: "caution", detail: `Last send failed ${age(sent.last_at)}` };
+      if (sent?.sent)
+        return { state: "clear", detail: `Last sent ${age(sent.last_sent)}` };
+      return { state: "set", detail: "Live, nothing sent yet" };
+    }
     if (effects.length) return { state: "hold", detail: "Shadow, nothing sent" };
     return { state: "off", detail: "Ignore only" };
   }
@@ -145,7 +154,7 @@ const Signal = (() => {
         { label: "Collect", ...collect },
         { label: "Judge", ...judge, state: flowing ? judge.state : "off" },
         { label: "Decide", ...decideStage(rules) },
-        { label: "Effect", ...effectStage(rules, data) },
+        { label: "Effect", ...effectStage(source, rules, data) },
       ],
     };
   }
@@ -157,7 +166,8 @@ const Signal = (() => {
     const worst = (state) =>
       tracks.flatMap((t) =>
         t.stages
-          .filter((s) => s.state === state && s.label !== "Effect")
+          // A blocked Effect has its own headline below; a failed send does not.
+          .filter((s) => s.state === state && !(s.label === "Effect" && s.state === "stop"))
           .map((s) => ({ track: t, stage: s })),
       );
     const stops = worst("stop"),
@@ -173,7 +183,7 @@ const Signal = (() => {
     const effect = data.effects_blocked
       ? "The safety gate is blocking all effects."
       : live
-        ? `${plural(live, "live rule")} can send notifications.`
+        ? `${plural(live, "live rule")} can send notifications${(data.summary.delivered || []).some((d) => d.sent) ? "." : "; none has sent yet."}`
         : effects.length
           ? "All effects are held in shadow."
           : "Policy selects ignore only.";
@@ -202,13 +212,20 @@ const Signal = (() => {
     } else if (!active.length) {
       title = "All tracks are paused";
       tone = "off";
+    } else if (!data.summary.events) {
+      // Polls succeeding proves collection only. With no events, Judge and Effect
+      // have never run, so calling this "clear" would claim more than was observed.
+      title = "Watching, no events yet";
+      tone = "off";
     } else {
       title = "All tracks clear";
       tone = "clear";
     }
-    const count = tracks.length
-      ? `${clear} of ${plural(active.length, "active track")} clear. `
-      : "HTTP ingress remains available. ";
+    const count = !tracks.length
+      ? "HTTP ingress remains available. "
+      : data.summary.events
+        ? `${clear} of ${plural(active.length, "active track")} clear. `
+        : `${clear} of ${plural(active.length, "active track")} collecting. No event has reached the model yet. `;
     return { title, tone, sentence: count + effect, tracks };
   }
 
@@ -358,6 +375,140 @@ const Signal = (() => {
     ];
   }
 
+  // The live view answers "is this watcher reading anything?". It reports only what
+  // the runtime counted, and says plainly when a service wrote nothing, because a
+  // quiet service and one that logs elsewhere look identical from the journal.
+  const PRIORITIES = ["emerg", "alert", "crit", "err", "warning", "notice", "info", "debug"];
+  const liveMemory = new Map();
+  function liveWhen(source, now) {
+    const h = source.health,
+      finished = date(h.finished_at);
+    if (source.paused) return "Paused";
+    if (h.running) return "Reading now";
+    if (!finished) return "Waiting for first read";
+    const next = Math.round((finished - now + source.every_ms) / 1000);
+    return `Read ${age(finished, now)} · ${next > 0 ? `next in ${next}s` : "next read due"}`;
+  }
+  function liveLamp(source, now) {
+    const h = source.health,
+      finished = date(h.finished_at);
+    if (source.paused || !finished) return "off";
+    if (h.failed) return "stop";
+    return now - finished > Math.max(30000, source.every_ms * 3) ? "caution" : "clear";
+  }
+  function liveSummary(source, started) {
+    const h = source.health,
+      since = clock(started),
+      units = (source.units || []).join(", ");
+    if (!h.polls) return `Nothing read yet since ${since}.`;
+    if (source.type !== "systemd-journal")
+      return `Since ${since}: fetched ${plural(h.scanned, "item")} in ${plural(h.polls, "poll")}, ${h.selected} new.`;
+    const read = `Since ${since}: read ${plural(h.scanned, "journal record")} in ${plural(h.polls, "poll")}`;
+    return h.watched
+      ? `${read}. ${h.watched} came from ${units}, and ${h.selected} ${h.selected === 1 ? "was" : "were"} ${source.priority} or higher and became ${h.selected === 1 ? "an event" : "events"}.`
+      : `${read}. None came from ${units}, so it has written nothing to the journal in that time, or it logs somewhere else.`;
+  }
+  function liveLine(record, source, fresh) {
+    const row = node("li", undefined, "live-line");
+    if (fresh) row.classList.add("is-new");
+    const at = date(record.at);
+    row.append(
+      node("time", at ? at.toLocaleTimeString() : "—", "live-time"),
+      node("span", PRIORITIES[record.priority] || "unknown", "live-priority"),
+      node("code", record.message || "(no text in this record)", "live-message"),
+      node(
+        "span",
+        record.selected ? "Became an event" : `Below ${source.priority}, not stored`,
+        "live-fate",
+      ),
+    );
+    row.dataset.selected = record.selected;
+    return row;
+  }
+  function renderLive(root, data) {
+    const now = new Date(data.at);
+    root.dataset.skew = String(Date.now() - now.getTime());
+    root.replaceChildren(
+      ...(data.sources || []).map((source) => {
+        const memory = liveMemory.get(source.name),
+          panel = node("article", undefined, "live-source"),
+          head = node("div", undefined, "live-head"),
+          light = lamp(liveLamp(source, now)),
+          when = node("p", liveWhen(source, now), "live-when");
+        when.dataset.source = JSON.stringify({
+          health: source.health,
+          every_ms: source.every_ms,
+          paused: source.paused,
+        });
+        // Replaying this on every refresh would make a heartbeat of the refresh
+        // itself. It must fire only when the runtime really completed another read.
+        if (memory && memory.polls !== source.health.polls) light.classList.add("is-beat");
+        head.append(light, node("h3", source.name), when);
+        panel.append(head, node("p", liveSummary(source, data.started_at), "live-summary"));
+        if (source.health.backlogged)
+          panel.append(
+            node(
+              "p",
+              "Falling behind: the last read filled its batch, so newer records are still waiting.",
+              "warning",
+            ),
+          );
+        const keys = source.recent.map((r) => `${r.at}|${r.message}`);
+        if (source.recent.length) {
+          const list = node("ol", undefined, "live-lines");
+          source.recent.forEach((record, i) =>
+            list.append(liveLine(record, source, memory && !memory.keys.has(keys[i]))),
+          );
+          panel.append(list);
+        }
+        liveMemory.set(source.name, { polls: source.health.polls, keys: new Set(keys) });
+        return panel;
+      }),
+    );
+  }
+  function tickLive(root) {
+    const now = new Date(Date.now() - Number(root.dataset.skew || 0));
+    for (const when of root.querySelectorAll(".live-when"))
+      when.textContent = liveWhen(JSON.parse(when.dataset.source), now);
+  }
+  // One owner for both timers, so stopping cannot leave either running. Stop also
+  // empties the view, because Lock must clear these lines with all private content.
+  function liveLoop(root, fetcher, active) {
+    let timer, ticker;
+    let generation = 0;
+    async function step() {
+      clearTimeout(timer);
+      const mine = generation;
+      if (active() && !document.hidden) {
+        try {
+          const data = await fetcher();
+          if (mine !== generation) return;
+          renderLive(root, data);
+        } catch {
+          if (mine !== generation) return;
+          root.replaceChildren(
+            node("p", "Live data is unavailable right now. Retrying.", "help"),
+          );
+        }
+      }
+      if (mine === generation) timer = setTimeout(step, 5000);
+    }
+    return {
+      start() {
+        this.stop();
+        ticker = setInterval(() => tickLive(root), 1000);
+        step();
+      },
+      stop() {
+        generation++;
+        clearTimeout(timer);
+        clearInterval(ticker);
+        root.replaceChildren();
+        liveMemory.clear();
+      },
+    };
+  }
+
   return {
     node,
     date,
@@ -374,5 +525,7 @@ const Signal = (() => {
     needsAttention,
     answers,
     eventStages,
+    renderLive,
+    liveLoop,
   };
 })();

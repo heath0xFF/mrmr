@@ -572,6 +572,12 @@ For an existing installation:
 mrmr run -config mrmr.yaml -control-addr 127.0.0.1:4243
 ```
 
+Overview shows what each watcher has read since the runtime started: records
+scanned, how many came from its units, and recent lines from those units, including
+ones below its severity threshold. Those lines are held in memory only and never
+stored. Configure's **Send test message** posts one fixed message to a Discord
+connection the active configuration uses, and records the result in the audit log.
+
 Behind Tailscale Serve, `-control-tailscale-user you@github` lets those tailnet
 logins open the page with no token. Serve supplies the login, and only requests to
 `-control-host` honour it. Any process on the same machine can reach the loopback

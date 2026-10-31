@@ -532,6 +532,115 @@ tbody tr[aria-current="true"] {
   text-align: center;
 }
 
+/* The live view. Log lines are data, so they are the one place monospace leads. */
+.live {
+  margin-top: 28px;
+}
+.live-sources {
+  display: grid;
+  gap: 10px;
+  margin-top: 8px;
+}
+.live-source {
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  min-width: 0;
+}
+.live-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+}
+.live-when {
+  margin: 0 0 0 auto;
+  color: var(--muted);
+  font-size: 0.8125rem;
+}
+.live-summary {
+  margin: 8px 0 0;
+  font-size: 0.875rem;
+}
+.live-lines {
+  display: grid;
+  max-height: 320px;
+  margin: 12px 0 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+  border-top: 1px solid var(--line-soft);
+  scrollbar-color: var(--dark-lamp) var(--surface);
+}
+.live-line {
+  display: grid;
+  grid-template-columns: 96px 64px minmax(0, 1fr) max-content;
+  gap: 2px 12px;
+  align-items: baseline;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--line-soft);
+  font-size: 0.8125rem;
+}
+.live-line:last-child {
+  border-bottom: 0;
+}
+.live-time,
+.live-priority,
+.live-fate {
+  color: var(--muted);
+  white-space: nowrap;
+}
+.live-message {
+  overflow-wrap: anywhere;
+}
+.live-line[data-selected="true"] .live-fate {
+  color: var(--amber-ink);
+  font-weight: 600;
+}
+/* The one authored motion in the system: a read completing, or a line arriving.
+   Both are facts from the runtime, never a decorative loop. */
+.lamp.is-beat {
+  animation: live-beat 700ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.live-line.is-new {
+  animation: live-arrive 1800ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes live-beat {
+  from {
+    transform: scale(1.45);
+  }
+}
+@keyframes live-arrive {
+  from {
+    background: var(--amber-wash);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .lamp.is-beat,
+  .live-line.is-new {
+    animation: none;
+  }
+}
+@media (max-width: 700px) {
+  .live-line {
+    grid-template-columns: max-content max-content minmax(0, 1fr);
+  }
+  .live-message {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+  .live-fate {
+    grid-column: 1 / -1;
+    grid-row: 3;
+    white-space: normal;
+  }
+  .live-when {
+    flex-basis: 100%;
+    margin-left: 0;
+  }
+}
+
 /* Model answers read as a compact definition list, not as JSON. */
 .answers {
   display: grid;

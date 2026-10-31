@@ -6,15 +6,16 @@ import (
 	"errors"
 	"io"
 	"log"
-	"net/http"
-	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/heath0xff/mrmr/internal/model"
 	"github.com/heath0xff/mrmr/internal/policy"
+	"net/http"
+	"net/http/httptest"
 )
 
 func TestPollHealthLifecycleAndConcurrentSnapshots(t *testing.T) {
@@ -84,5 +85,30 @@ func TestD1LatencyPersistsAndLogsWithoutPayload(t *testing.T) {
 	}
 	if !strings.Contains(logs.String(), "latency_ms=") || !strings.Contains(logs.String(), e.ID) || strings.Contains(logs.String(), "private-event-message") || strings.Contains(logs.String(), server.URL) {
 		t.Fatalf("unsafe or missing timing log: %s", logs.String())
+	}
+}
+
+// The ring must stay bounded in count and size, because a chatty service would
+// otherwise grow memory for as long as the runtime runs.
+func TestRecentSeenIsBoundedAndNewestFirst(t *testing.T) {
+	r := &Runtime{}
+	if got := r.RecentSeen("none"); got == nil || len(got) != 0 {
+		t.Fatalf("empty result must be a non-nil array: %#v", got)
+	}
+	for i := 0; i < seenRecordLimit+5; i++ {
+		r.RecordSeen("s", SeenRecord{Priority: i, Message: strings.Repeat("é", seenMessageLimit)})
+	}
+	got := r.RecentSeen("s")
+	if len(got) != seenRecordLimit || got[0].Priority != seenRecordLimit+4 {
+		t.Fatalf("len %d newest %d", len(got), got[0].Priority)
+	}
+	if len(got[0].Message) > seenMessageLimit || !utf8.ValidString(got[0].Message) {
+		t.Fatalf("message not safely bounded: %d bytes", len(got[0].Message))
+	}
+	r.RecordPoll("s", PollCounts{Scanned: 3, Watched: 2, Selected: 1, Backlogged: true})
+	r.RecordPoll("s", PollCounts{Scanned: 4})
+	h := r.PollHealth("s")
+	if h.Polls != 2 || h.Scanned != 7 || h.Watched != 2 || h.LastScanned != 4 || h.LastWatched != 0 || h.Backlogged {
+		t.Fatalf("health = %+v", h)
 	}
 }

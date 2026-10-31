@@ -136,12 +136,31 @@ function renderMonitors() {
       const connection = state.config.connections?.find(
         (c) => c.kind === "Discord" && c.name === ref,
       );
-      const status = el(
-        "p",
-        `Discord credential ${ref}: ${connection?.credential || "unknown"}. Delivery not verified.`,
-      );
+      const deliveryText = (at) =>
+        at
+          ? `Discord connection ${ref}: test message delivered ${new Date(at).toLocaleString()}. That proves the webhook works, not that an event has produced an alert.`
+          : `Discord connection ${ref}: ${connection?.credential || "unknown"}. No test message sent yet.`;
+      const status = el("p", deliveryText(connection?.delivery_checked_at));
       status.className = "help";
-      article.append(status);
+      const test = el("button", "Send test message");
+      test.type = "button";
+      test.addEventListener("click", async () => {
+        test.disabled = true;
+        try {
+          const sent = await api("/manage/api/test-delivery", {
+            name: ref,
+            confirm: true,
+          });
+          if (connection) connection.delivery_checked_at = sent.at;
+          status.textContent = deliveryText(sent.at);
+          notice("Discord accepted the test message. Check the channel.");
+        } catch (err) {
+          fail(err.message);
+        } finally {
+          test.disabled = false;
+        }
+      });
+      article.append(status, test);
     }
     const buttons = el("div");
     buttons.className = "row";

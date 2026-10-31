@@ -129,7 +129,11 @@ func (j *Journal) RunUntil(ctx context.Context, stop <-chan struct{}, rt *mrunti
 
 func (j *Journal) poll(ctx context.Context, rt *mruntime.Runtime) (err error) {
 	rt.StartPoll(j.cfg.Name)
-	defer func() { rt.FinishPoll(j.cfg.Name, err) }()
+	var counts mruntime.PollCounts
+	defer func() {
+		rt.RecordPoll(j.cfg.Name, counts)
+		rt.FinishPoll(j.cfg.Name, err)
+	}()
 	cursor, err := rt.DB.Cursor(j.cfg.Name)
 	if err != nil {
 		return err
@@ -141,10 +145,12 @@ func (j *Journal) poll(ctx context.Context, rt *mruntime.Runtime) (err error) {
 	if err != nil {
 		return err
 	}
+	counts.Backlogged = len(records) >= journalBatchSize
 	for _, record := range records {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+		counts.Scanned++
 		cursor, err = record.cursor()
 		if err != nil {
 			return err
@@ -153,7 +159,12 @@ func (j *Journal) poll(ctx context.Context, rt *mruntime.Runtime) (err error) {
 		if err != nil {
 			return err
 		}
+		if unit, watched := j.watchedUnit(record); watched {
+			counts.Watched++
+			rt.RecordSeen(j.cfg.Name, seenRecord(record, unit, selected))
+		}
 		if selected {
+			counts.Selected++
 			if _, err := rt.Ingest(ctx, e); err != nil {
 				// Preserve the old batch checkpoint. Already stored events
 				// dedup on the next poll; runtime partial-work recovery is a
@@ -170,7 +181,8 @@ func (j *Journal) poll(ctx context.Context, rt *mruntime.Runtime) (err error) {
 	}
 	// Unselected records advance too: a quiet source must not retain an
 	// ancient warning's cursor until vacuum removes it. Nothing from those
-	// records is persisted except the final opaque journal position.
+	// records is persisted except the final opaque journal position; the live
+	// view's copy of watched lines is memory only.
 	return rt.DB.SetCursor(j.cfg.Name, cursor)
 }
 
@@ -211,23 +223,26 @@ func (r journalRecord) cursor() (string, error) {
 	return c, nil
 }
 
-func (j *Journal) normalize(r journalRecord, cursor string) (event.Event, bool, error) {
+// watchedUnit applies this source's identity rules: scope, the exclusion of our own
+// output, and the configured units. It ignores severity, so the live view can show
+// that a service is being read even when none of its lines qualify as Events.
+func (j *Journal) watchedUnit(r journalRecord) (string, bool) {
 	// Unit names are not unique across users or between system and user scopes.
 	// Journald supplies the trusted identity fields; MESSAGE cannot select scope.
 	_, hasUserUnit := r["_SYSTEMD_USER_UNIT"]
 	if j.cfg.Scope == "user" {
 		if !hasUserUnit || r.text("_UID") != strconv.Itoa(os.Getuid()) {
-			return event.Event{}, false, nil
+			return "", false
 		}
 	} else if hasUserUnit || (j.cfg.Scope != "" && j.cfg.Scope != "system") {
-		return event.Event{}, false, nil
+		return "", false
 	}
 	// A broad unit choice must not turn our own notifications/diagnostics
 	// into new model work. Journald's trusted PID cannot be set by a client.
 	// Include boot identity: a persisted backlog may contain an unrelated
 	// process with this PID from a previous boot.
 	if j.bootID != "" && r.text("_BOOT_ID") == j.bootID && r.text("_PID") == strconv.Itoa(os.Getpid()) {
-		return event.Event{}, false, nil
+		return "", false
 	}
 	unit := r.text("_SYSTEMD_UNIT")
 	// Managers emit transitions outside the watched unit's cgroup. Only a
@@ -247,6 +262,25 @@ func (j *Journal) normalize(r journalRecord, cursor string) (event.Event, bool, 
 	for _, configured := range j.cfg.Units {
 		allowed = allowed || unit == configured
 	}
+	return unit, allowed
+}
+
+// seenRecord copies only what the live view shows. A missing or binary message
+// stays empty rather than being decoded into something it never said.
+func seenRecord(r journalRecord, unit string, selected bool) mruntime.SeenRecord {
+	priority, err := strconv.Atoi(r.text("PRIORITY"))
+	if err != nil {
+		priority = -1
+	}
+	seen := mruntime.SeenRecord{Unit: unit, Priority: priority, Message: r.text("MESSAGE"), Selected: selected}
+	if micros, err := strconv.ParseInt(r.text("__REALTIME_TIMESTAMP"), 10, 64); err == nil && micros > 0 {
+		seen.At = time.UnixMicro(micros).UTC()
+	}
+	return seen
+}
+
+func (j *Journal) normalize(r journalRecord, cursor string) (event.Event, bool, error) {
+	unit, allowed := j.watchedUnit(r)
 	priority, err := strconv.Atoi(r.text("PRIORITY"))
 	threshold, valid := config.JournalPriority(j.cfg.Priority)
 	if !allowed || !valid || err != nil || priority < 0 || priority > threshold {

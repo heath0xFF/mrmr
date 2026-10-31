@@ -675,3 +675,10 @@ details > summary {
 #audit .panel {
   max-width: none;
 }
+
+/* Overrides the Outcome column's sizing when one cell spans an empty table. */
+.events-table td.empty:last-child,
+.attention-table td.empty:last-child {
+  text-align: center;
+  white-space: normal;
+}

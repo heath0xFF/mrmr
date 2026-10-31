@@ -117,6 +117,10 @@ func (p *HTTPPoller) poll(ctx context.Context, rt *runtime.Runtime) (pollErr err
 	}
 
 	var ingested, dups, cursorAdvanced int
+	// A feed has no selection step: everything fetched belongs to this source.
+	defer func() {
+		rt.RecordPoll(p.cfg.Name, runtime.PollCounts{Scanned: len(items), Watched: len(items), Selected: ingested})
+	}()
 	complete := true
 	newCursor := ""
 	for i, item := range items {

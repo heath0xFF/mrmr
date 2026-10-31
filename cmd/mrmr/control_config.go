@@ -257,11 +257,22 @@ func (m *manager) route(w http.ResponseWriter, r *http.Request) error {
 			if c.Configured {
 				status = "configured (not tested)"
 			}
-			connections = append(connections, map[string]string{"name": c.Name, "kind": "Discord", "credential": status, "revision": c.Revision})
+			// An audit row, because this is a manual check rather than an Execution:
+			// it proves the webhook works, not that any event produced a message.
+			var checked sql.NullString
+			if err := m.db.QueryRow(`SELECT MAX(at) FROM control_audit WHERE operation='test-delivery' AND target=? AND result='delivered'`, c.Name).Scan(&checked); err != nil {
+				return err
+			}
+			if checked.Valid {
+				status = "configured, test message delivered"
+			}
+			connections = append(connections, map[string]string{"name": c.Name, "kind": "Discord", "credential": status, "revision": c.Revision, "delivery_checked_at": checked.String})
 		}
 		return controlJSON(w, map[string]any{"connections": connections, "active": active, "revision": m.activeRevision(), "draft": draft, "history": history, "document": doc, "setup": m.current.Load() == nil, "shadow_override": m.blocked.Load(), "bootstrap": map[string]any{"Server": m.bootstrap.Server, "DB": m.bootstrap.DB}})
 	case r.Method == "POST" && r.URL.Path == "/manage/api/discord":
 		return m.saveDiscord(w, r)
+	case r.Method == "POST" && r.URL.Path == "/manage/api/test-delivery":
+		return m.testDelivery(w, r)
 	case r.Method == "GET" && r.URL.Path == "/manage/api/revision":
 		var text string
 		if err := m.db.QueryRow(`SELECT yaml FROM control_revisions WHERE id=?`, r.URL.Query().Get("id")).Scan(&text); err != nil {
@@ -566,4 +577,79 @@ func (m *manager) activate(ctx context.Context, c *config.Config, text, base str
 		return fmt.Errorf("Configuration is active, but directory sync failed. Verify disk health before restarting.")
 	}
 	return nil
+}
+
+// testDeliveryMessage is fixed so this endpoint can never carry caller text.
+const testDeliveryMessage = "mrmr test message, sent from the management page. No event or incident caused this."
+
+// testDeliveryInterval bounds how often a browser can post to the operator's channel.
+const testDeliveryInterval = 30 * time.Second
+
+// testDelivery sends one labeled message when an operator asks for it. It exists
+// because "credential configured" says nothing about whether Discord accepts it.
+// Only a webhook the active policy already references can be named, the safety gate
+// still wins, and intent is audited first so a crash cannot hide an external send.
+func (m *manager) testDelivery(w http.ResponseWriter, r *http.Request) error {
+	var req struct {
+		Name    string `json:"name"`
+		Confirm bool   `json:"confirm"`
+	}
+	if err := decodeControl(w, r, &req); err != nil {
+		return err
+	}
+	if !req.Confirm {
+		return fmt.Errorf("Confirm the test message first; nothing was sent.")
+	}
+	if m.blocked.Load() {
+		return fmt.Errorf("The safety gate is blocking effects; nothing was sent.")
+	}
+	if !m.activeDiscordReference(req.Name) {
+		return fmt.Errorf("That Discord connection is not used by the active configuration; nothing was sent.")
+	}
+	var last sql.NullString
+	if err := m.db.QueryRow(`SELECT MAX(at) FROM control_audit WHERE operation='test-delivery' AND target=? AND result='intent'`, req.Name).Scan(&last); err != nil {
+		return fmt.Errorf("Cannot read test history; nothing was sent.")
+	}
+	if at, err := time.Parse(time.RFC3339Nano, last.String); err == nil && time.Since(at) < testDeliveryInterval {
+		return fmt.Errorf("A test message was just sent. Wait 30 seconds before sending another.")
+	}
+	webhook, err := m.discord.Resolve(req.Name)
+	if err != nil {
+		return fmt.Errorf("That Discord connection has no saved webhook; nothing was sent.")
+	}
+	if err := m.audit("test-delivery", req.Name, "intent"); err != nil {
+		return fmt.Errorf("Cannot record test intent; nothing was sent.")
+	}
+	sendErr := notify.Discord(r.Context(), &http.Client{}, webhook, testDeliveryMessage)
+	result := "delivered"
+	if sendErr != nil {
+		result = "failed"
+	}
+	if err := m.audit("test-delivery", req.Name, result); err != nil {
+		return fmt.Errorf("The test finished, but its audit could not be saved.")
+	}
+	if sendErr != nil {
+		// notify.Discord errors are written to exclude the credential-bearing URL.
+		return fmt.Errorf("Discord did not accept the test message: %v", sendErr)
+	}
+	return controlJSON(w, map[string]string{"name": req.Name, "at": time.Now().UTC().Format(time.RFC3339Nano)})
+}
+
+func (m *manager) activeDiscordReference(name string) bool {
+	snap := m.current.Load()
+	if snap == nil || name == "" {
+		return false
+	}
+	for _, p := range snap.cfg.Policies() {
+		outcomes := []policy.Then{p.Default}
+		for _, rule := range p.Rules {
+			outcomes = append(outcomes, rule.Then)
+		}
+		for _, outcome := range outcomes {
+			if n := outcome.Notify; n != nil && n.Via == "discord" && n.WebhookEnv == name {
+				return true
+			}
+		}
+	}
+	return false
 }

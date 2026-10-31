@@ -129,6 +129,49 @@ type DashboardSummary struct {
 	Window    int           `json:"window"`
 	Models    []ModelTiming `json:"models"`
 	Repeats   []Repeat      `json:"repeats"`
+	Delivered []Delivery    `json:"delivered"`
+}
+
+// Delivery is stored evidence that a notify outcome ran for a source. Only a real
+// attempt counts: shadow and pending rows prove nothing about the adapter.
+type Delivery struct {
+	Source     string `json:"source"`
+	Sent       int    `json:"sent"`
+	LastSent   string `json:"last_sent"`
+	LastAt     string `json:"last_at"`
+	LastStatus string `json:"last_status"`
+}
+
+func (d *DB) dashboardDeliveries(ctx context.Context) ([]Delivery, error) {
+	rows, err := d.QueryContext(ctx, `SELECT e.source, x.status, x.created_at FROM executions x
+		JOIN events e ON e.id=x.event_id
+		WHERE x.outcome='notify' AND x.status IN ('ok','error') ORDER BY x.created_at`)
+	if err != nil {
+		return nil, fmt.Errorf("dashboard deliveries: %w", err)
+	}
+	defer rows.Close()
+	out, index := []Delivery{}, map[string]int{}
+	for rows.Next() {
+		var source, status, at string
+		if err := rows.Scan(&source, &status, &at); err != nil {
+			return nil, fmt.Errorf("dashboard deliveries: %w", err)
+		}
+		i, ok := index[source]
+		if !ok {
+			i = len(out)
+			index[source] = i
+			out = append(out, Delivery{Source: source})
+		}
+		out[i].LastAt, out[i].LastStatus = at, status
+		if status == "ok" {
+			out[i].Sent++
+			out[i].LastSent = at
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("dashboard deliveries: %w", err)
+	}
+	return out, nil
 }
 
 func (d *DB) DashboardSummary(ctx context.Context) (DashboardSummary, error) {
@@ -139,6 +182,10 @@ func (d *DB) DashboardSummary(ctx context.Context) (DashboardSummary, error) {
 		(SELECT count(*) FROM executions WHERE outcome='ignore'),
 		(SELECT count(*) FROM executions WHERE status='pending')`).Scan(&s.Events, &s.Unlabeled, &s.Shadow, &s.Ignored, &s.Pending); err != nil {
 		return s, fmt.Errorf("dashboard counts: %w", err)
+	}
+	var err error
+	if s.Delivered, err = d.dashboardDeliveries(ctx); err != nil {
+		return s, err
 	}
 	rows, err := d.QueryContext(ctx, `SELECT interpreter,model,status,latency_ms,created_at,COALESCE(error,'') FROM decisions ORDER BY created_at DESC,id DESC LIMIT ?`, DashboardWindow)
 	if err != nil {

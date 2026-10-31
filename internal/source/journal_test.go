@@ -299,3 +299,38 @@ func TestJournalPlatformGate(t *testing.T) {
 		t.Fatal("want actionable platform/executable error")
 	}
 }
+
+// The live view must separate what was read from what was selected, and must never
+// keep another unit's text: this watcher scans the whole journal to find its own.
+func TestJournalReportsWhatItRead(t *testing.T) {
+	j := testJournal(t)
+	modelURL, _ := modelMock(t)
+	rt := testRuntime(t, modelURL)
+	ctx := context.Background()
+	if err := j.prepare(ctx, rt.DB); err != nil {
+		t.Fatal(err)
+	}
+	journalFile(t, j, "batch", journalJSON("anchor", "example.service", "4", "old")+
+		journalJSON("other", "other.service", "3", "private to another unit")+
+		journalJSON("info", "example.service", "6", "routine line")+
+		journalJSON("warn", "example.service", "4", "bad line"))
+	if err := j.poll(ctx, rt); err != nil {
+		t.Fatal(err)
+	}
+	h := rt.PollHealth(j.cfg.Name)
+	if h.Polls != 1 || h.Scanned != 3 || h.Watched != 2 || h.Selected != 1 || h.Backlogged {
+		t.Fatalf("health = %+v", h)
+	}
+	seen := rt.RecentSeen(j.cfg.Name)
+	if len(seen) != 2 || seen[0].Message != "bad line" || !seen[0].Selected || seen[1].Message != "routine line" || seen[1].Selected {
+		t.Fatalf("seen = %+v", seen)
+	}
+	for _, record := range seen {
+		if strings.Contains(record.Message, "another unit") {
+			t.Fatal("kept text from an unwatched unit")
+		}
+	}
+	if got := countEvents(t, rt); got != 1 {
+		t.Fatalf("below-threshold line was stored: %d events", got)
+	}
+}

@@ -103,6 +103,7 @@ function lock() {
   state.token = "";
   state.unlocked = false;
   state.ambient = false;
+  liveView.stop();
   state.detailGeneration++;
   clearTimeout(state.timer);
   $("app").hidden = true;
@@ -203,6 +204,7 @@ async function enter() {
   $("logout").hidden = state.ambient;
   document.body.classList.remove("locked");
   await overview();
+  liveView.start();
   await events();
   const id = new URLSearchParams(location.search).get("event");
   if (id) await detail(id);
@@ -393,6 +395,15 @@ function renderGate(blocked) {
     : "Safety gate off: effects follow their rules";
   $("shadow").disabled = blocked;
 }
+const liveView = Signal.liveLoop(
+  $("live-sources"),
+  () => api("/dashboard/api/live"),
+  () =>
+    state.unlocked &&
+    state.config &&
+    !state.config.setup &&
+    (location.hash === "#overview" || !location.hash),
+);
 async function overview() {
   clearTimeout(state.timer);
   if (!state.unlocked) return;
@@ -404,8 +415,10 @@ async function overview() {
       const go = el("a", "Open Configure to set a model endpoint and source");
       go.href = "#configure";
       $("overview-content").replaceChildren(go);
+      $("live").hidden = true;
       return;
     }
+    $("live").hidden = false;
     const data = await api("/dashboard/api/overview");
     const reading = Signal.assess(data);
     $("host").textContent = data.hostname;
