@@ -91,17 +91,36 @@ func (j *Journal) prepare(ctx context.Context, db *storage.DB) error {
 }
 
 func (j *Journal) Run(ctx context.Context, rt *mruntime.Runtime) {
+	j.RunUntil(ctx, nil, rt)
+}
+
+// Revision changes drain a poll without canceling its interpretation or
+// leaving a half-advanced cursor. Process shutdown remains cancellable.
+func (j *Journal) RunUntil(ctx context.Context, stop <-chan struct{}, rt *mruntime.Runtime) {
 	ticker := time.NewTicker(j.cfg.Every)
 	defer ticker.Stop()
 	for {
-		if ctx.Err() != nil {
+		select {
+		case <-ctx.Done():
 			return
+		case <-stop:
+			return
+		default:
 		}
-		if err := j.poll(ctx, rt); err != nil && ctx.Err() == nil {
+		// Bound a batch's total interpretation time, not only each journal read.
+		pollCtx, cancel := ctx, func() {}
+		if stop != nil {
+			pollCtx, cancel = context.WithTimeout(ctx, 2*time.Minute)
+		}
+		err := j.poll(pollCtx, rt)
+		cancel()
+		if err != nil && ctx.Err() == nil {
 			log.Printf("mrmr: journal %s: %v", j.cfg.Name, err)
 		}
 		select {
 		case <-ctx.Done():
+			return
+		case <-stop:
 			return
 		case <-ticker.C:
 		}

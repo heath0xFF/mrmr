@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -23,7 +24,7 @@ import (
 	"github.com/heath0xff/mrmr/internal/runtime"
 )
 
-//go:embed index.html dashboard.css dashboard.js
+//go:embed index.html dashboard.css dashboard.js manage.html manage.css manage.js manage-setup.js manage-monitors.js
 var assets embed.FS
 
 type sourceView struct {
@@ -34,6 +35,15 @@ type sourceView struct {
 	Units     []string           `json:"units"`
 	Priority  string             `json:"priority"`
 	Health    runtime.PollHealth `json:"health"`
+	Paused    bool               `json:"paused"`
+}
+
+// modelView excludes endpoint URLs and credential references from the browser.
+type modelView struct {
+	Name     string `json:"name"`
+	Role     string `json:"role"`
+	Provider string `json:"provider"`
+	Model    string `json:"model"`
 }
 
 type policyView struct {
@@ -73,6 +83,34 @@ func New(rt *runtime.Runtime, cfg *config.Config) http.Handler {
 		addRule("rule:"+strconv.Itoa(i+1), r.If, r.Then)
 	}
 	addRule("default", nil, cfg.Policy.Default)
+	// Make source-local authority visible and redact its credentials too.
+	monitorNames := make([]string, 0, len(cfg.Monitors))
+	for name := range cfg.Monitors {
+		monitorNames = append(monitorNames, name)
+	}
+	sort.Strings(monitorNames)
+	monitorInterpreters := make(map[string]string, len(monitorNames))
+	for _, name := range monitorNames {
+		monitorInterpreters[name] = cfg.Monitors[name].Interpret.Model
+		p := cfg.Monitors[name].Policy
+		for i, rule := range p.Rules {
+			addRule("monitor:"+name+"/rule:"+strconv.Itoa(i+1), rule.If, rule.Then)
+		}
+		addRule("monitor:"+name+"/default", nil, p.Default)
+	}
+	models := make([]modelView, 0, len(cfg.Models))
+	for name, m := range cfg.Models {
+		role := m.Role
+		if role == "" {
+			role = "decision (legacy)"
+		}
+		models = append(models, modelView{name, role, m.Provider, m.Model})
+	}
+	sort.Slice(models, func(i, j int) bool { return models[i].Name < models[j].Name })
+	overrides := make(map[string]string, len(cfg.InterpretByType))
+	for eventType, spec := range cfg.InterpretByType {
+		overrides[eventType] = spec.Model
+	}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
@@ -153,9 +191,9 @@ func New(rt *runtime.Runtime, cfg *config.Config) http.Handler {
 			summary, err := rt.DB.DashboardSummary(ctx)
 			sources := []sourceView{}
 			for _, s := range cfg.Sources {
-				sources = append(sources, sourceView{s.Name, s.Type, s.EventType, s.Every.Milliseconds(), s.Units, s.Priority, rt.PollHealth(s.Name)})
+				sources = append(sources, sourceView{s.Name, s.Type, s.EventType, s.Every.Milliseconds(), s.Units, s.Priority, rt.PollHealth(s.Name), s.Paused})
 			}
-			send(map[string]any{"at": time.Now().UTC(), "started_at": started, "hostname": hostname, "summary": summary, "sources": sources, "policy": rules, "filter_count": len(cfg.Filter)}, err)
+			send(map[string]any{"at": time.Now().UTC(), "started_at": started, "hostname": hostname, "summary": summary, "sources": sources, "policy": rules, "filter_count": len(cfg.Filter), "models": models, "interpreter": cfg.Interpret.Model, "interpret_overrides": overrides, "monitor_interpreters": monitorInterpreters, "config_revision": rt.ConfigRevision, "effects_blocked": rt.EffectsBlocked != nil && rt.EffectsBlocked()}, err)
 		case "/dashboard/api/events":
 			q := r.URL.Query()
 			offset := 0
@@ -171,7 +209,14 @@ func New(rt *runtime.Runtime, cfg *config.Config) http.Handler {
 				http.Error(w, "Invalid event query.", 400)
 				return
 			}
-			page, err := rt.DB.DashboardEvents(ctx, q.Get("q"), view, offset)
+			before := q.Get("before")
+			if before != "" {
+				if _, err := time.Parse(time.RFC3339Nano, before); err != nil {
+					http.Error(w, "Invalid snapshot time.", 400)
+					return
+				}
+			}
+			page, err := rt.DB.DashboardEventsAt(ctx, q.Get("q"), view, offset, before)
 			send(page, err)
 		case "/dashboard/api/event":
 			id := r.URL.Query().Get("id")
@@ -211,7 +256,7 @@ func New(rt *runtime.Runtime, cfg *config.Config) http.Handler {
 
 func validView(view string) bool {
 	switch view {
-	case "all", "unlabeled", "shadow", "ignore", "errors":
+	case "all", "unlabeled", "shadow", "ignore", "pending", "errors":
 		return true
 	}
 	return false

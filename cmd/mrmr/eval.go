@@ -41,7 +41,18 @@ type calibrationBucket struct {
 	MeanProbability float64 `json:"mean_probability"`
 }
 
+// Eval results retain typed judgments and timing, never raw provider responses.
+// Both CLI summaries and saved browser reports use this same result contract.
+type evalResult struct {
+	EventID   string `json:"event_id"`
+	Category  string `json:"category"`
+	Outcome   string `json:"outcome"`
+	LatencyMs int64  `json:"latency_ms"`
+	Status    string `json:"status"`
+}
+
 type evalSummary struct {
+	Results           []evalResult              `json:"results,omitempty"`
 	Modes             map[string]int            `json:"modes"`
 	Confusion         map[string]map[string]int `json:"confusion"` // expected -> predicted; <invalid> includes failures
 	Classes           map[string]classMetrics   `json:"per_class"`
@@ -82,7 +93,7 @@ func eval(args []string) error {
 		return err
 	}
 	for _, tc := range cases {
-		spec := cfg.InterpreterFor(tc.Event.Type)
+		spec := cfg.InterpreterForEvent(tc.Event)
 		if len(spec.Questions) == 0 {
 			if f, ok := spec.Schema["category"]; !ok || f.Type != "string" {
 				return fmt.Errorf("eval requires string interpret.schema field %q", "category")
@@ -151,6 +162,9 @@ func evaluate(ctx context.Context, cfg *config.Config, cases []evalCase, progres
 	}
 	client := &model.Client{}
 	for i, tc := range cases {
+		if ctx.Err() != nil {
+			break
+		}
 		e := tc.Event
 		// Generated fixtures may omit identity/time; keep their defaults
 		// deterministic without rewriting the evidence in real events.
@@ -161,13 +175,13 @@ func evaluate(ctx context.Context, cfg *config.Config, cases []evalCase, progres
 			e.Timestamp = time.Date(2026, time.January, 1, 12, 0, 0, 0, time.UTC)
 		}
 		payload, _ := json.Marshal(e)
-		spec := cfg.InterpreterFor(e.Type)
+		spec := cfg.InterpreterForEvent(e)
 		mode := "structured-output"
 		if len(spec.Questions) != 0 {
 			mode = "decision"
 		}
 		summary.Modes[mode]++
-		result, _, _, err := client.InterpretWithQuestions(ctx, cfg.Models[spec.Model], spec.Model, spec.Prompt, spec.Schema, spec.Questions, payload)
+		result, latency, _, err := client.InterpretWithQuestions(ctx, cfg.Models[spec.Model], spec.Model, spec.Prompt, spec.Schema, spec.Questions, payload)
 
 		category, requiresAction, outcome := "<invalid>", false, "ignore"
 		actionPresent := false
@@ -175,10 +189,15 @@ func evaluate(ctx context.Context, cfg *config.Config, cases []evalCase, progres
 			summary.ValidDecisions++
 			category = evaluatedCategory(result)
 			requiresAction, actionPresent = evaluatedRequiresAction(result)
-			then, _ := cfg.Policy.EvaluateEvent(result, e)
+			then, _ := cfg.PolicyForEvent(e).EvaluateEvent(result, e)
 			outcome = then.Outcome()
 		}
 
+		status := "ok"
+		if err != nil {
+			status = "model-error"
+		}
+		summary.Results = append(summary.Results, evalResult{e.ID, category, outcome, latency, status})
 		categoryOK := err == nil && category == tc.Expected.Category
 		actionOK := tc.Expected.RequiresAction == nil || (err == nil && actionPresent && requiresAction == *tc.Expected.RequiresAction)
 		if tc.Expected.RequiresAction != nil {
@@ -271,7 +290,7 @@ func selectEvalMode(cfg *config.Config, cases []evalCase, mode string) ([]evalCa
 	}
 	var selected []evalCase
 	for _, tc := range cases {
-		decision := len(cfg.InterpreterFor(tc.Event.Type).Questions) != 0
+		decision := len(cfg.InterpreterForEvent(tc.Event).Questions) != 0
 		if mode == "all" || (mode == "decision" && decision) || (mode == "structured-output" && !decision) {
 			selected = append(selected, tc)
 		}

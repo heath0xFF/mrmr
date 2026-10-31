@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 )
 
 // Dashboard queries return bounded projections, never entire payloads in the
@@ -31,16 +32,35 @@ type EventSummary struct {
 type EventPage struct {
 	Events []EventSummary `json:"events"`
 	More   bool           `json:"more"`
+	Before string         `json:"before"`
 }
 
 // Search uses bound values and instr rather than LIKE, so user text is literal.
 // Views use a fixed allowlist; no client-supplied SQL fragments reach the query.
 func (d *DB) DashboardEvents(ctx context.Context, query, view string, offset int) (EventPage, error) {
+	return d.DashboardEventsAt(ctx, query, view, offset, "")
+}
+
+// A fixed receive-time boundary keeps new ingestion from shifting an operator's
+// pages. It does not freeze later Decisions or labels for existing Events.
+func (d *DB) DashboardEventsAt(ctx context.Context, query, view string, offset int, before string) (EventPage, error) {
 	out := EventPage{Events: []EventSummary{}}
+	if before == "" {
+		before = time.Now().UTC().Format(time.RFC3339Nano)
+	}
+	boundary, err := time.Parse(time.RFC3339Nano, before)
+	if err != nil {
+		return out, fmt.Errorf("invalid snapshot time")
+	}
+	out.Before = boundary.UTC().Format(time.RFC3339Nano)
+	// Stored RFC3339Nano values omit trailing zeros. Pad fractional seconds
+	// before comparison; SQLite's date functions otherwise round to milliseconds.
+	before = boundary.UTC().Format("2006-01-02T15:04:05.000000000")
 	views := map[string]string{
 		"all": "1", "unlabeled": "l.event_id IS NULL",
 		"shadow": "x.status = 'shadow'", "ignore": "x.outcome = 'ignore'",
-		"errors": "(d.status IN ('errored','invalid') OR x.status = 'error')",
+		"pending": "x.status = 'pending'",
+		"errors":  "(d.status IN ('errored','invalid') OR x.status = 'error')",
 	}
 	where, ok := views[view]
 	if !ok || offset < 0 || offset > 100000 || len(query) > 200 {
@@ -54,8 +74,8 @@ func (d *DB) DashboardEvents(ctx context.Context, query, view string, offset int
 		LEFT JOIN decisions d ON d.id=(SELECT id FROM decisions WHERE event_id=e.id ORDER BY created_at DESC,id DESC LIMIT 1)
 		LEFT JOIN executions x ON x.id=(SELECT id FROM executions WHERE event_id=e.id ORDER BY created_at DESC,id DESC LIMIT 1)
 		LEFT JOIN event_labels l ON l.event_id=e.id
-		WHERE `+where+` AND (?='' OR instr(lower(e.subject || ' ' || e.source || ' ' || e.type || ' ' || e.id || ' ' || COALESCE(e.data,'')),lower(?))>0)
-		ORDER BY e.ingest_time DESC,e.id DESC LIMIT ? OFFSET ?`, query, query, DashboardPageSize+1, offset)
+		WHERE `+where+` AND (substr(e.ingest_time,1,19) || '.' || substr(substr(rtrim(e.ingest_time,'Z'),21) || '000000000',1,9))<=? AND (?='' OR instr(lower(e.subject || ' ' || e.source || ' ' || e.type || ' ' || e.id || ' ' || COALESCE(e.data,'')),lower(?))>0)
+		ORDER BY e.ingest_time DESC,e.id DESC LIMIT ? OFFSET ?`, before, query, query, DashboardPageSize+1, offset)
 	if err != nil {
 		return out, fmt.Errorf("dashboard events: %w", err)
 	}

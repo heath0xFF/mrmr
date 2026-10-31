@@ -73,12 +73,13 @@ type Execution struct {
 // of each per event; the current pipeline writes one, and reporting what is
 // actually stored beats encoding that assumption in the reader.
 type Inspection struct {
-	Event         event.Event       `json:"event"`
-	Decisions     []event.Decision  `json:"decisions,omitempty"`
-	Executions    []Execution       `json:"executions,omitempty"`
-	Trace         []event.TraceStep `json:"trace,omitempty"`
-	Label         *EventLabel       `json:"label,omitempty"`
-	ChildEventIDs []string          `json:"child_event_ids,omitempty"`
+	ConfigRevision string            `json:"config_revision,omitempty"`
+	Event          event.Event       `json:"event"`
+	Decisions      []event.Decision  `json:"decisions,omitempty"`
+	Executions     []Execution       `json:"executions,omitempty"`
+	Trace          []event.TraceStep `json:"trace,omitempty"`
+	Label          *EventLabel       `json:"label,omitempty"`
+	ChildEventIDs  []string          `json:"child_event_ids,omitempty"`
 }
 
 // Open opens (creating if needed) the SQLite database with WAL mode
@@ -181,6 +182,50 @@ ALTER TABLE executions ADD COLUMN policy_hash TEXT NOT NULL DEFAULT '';
 CREATE INDEX idx_events_ingest ON events(ingest_time, id);
 CREATE INDEX idx_decisions_created ON decisions(created_at, id);
 `,
+	`
+CREATE TABLE control_revisions (
+ id TEXT PRIMARY KEY, yaml TEXT NOT NULL, created_at TEXT NOT NULL,
+ status TEXT NOT NULL, base TEXT NOT NULL
+);
+CREATE TABLE control_draft (
+ singleton INTEGER PRIMARY KEY CHECK(singleton=1), yaml TEXT NOT NULL,
+ revision TEXT NOT NULL, base TEXT NOT NULL
+);
+CREATE TABLE control_audit (
+ id INTEGER PRIMARY KEY, at TEXT NOT NULL, actor TEXT NOT NULL,
+ operation TEXT NOT NULL, target TEXT NOT NULL, result TEXT NOT NULL
+);
+CREATE TABLE control_settings (name TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE review_state (
+ event_id TEXT PRIMARY KEY REFERENCES events(id), state TEXT NOT NULL,
+ origin TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE TABLE label_history (
+ id INTEGER PRIMARY KEY, event_id TEXT NOT NULL REFERENCES events(id),
+ category TEXT NOT NULL, requires_action INTEGER NOT NULL,
+ expected_outcome TEXT NOT NULL, labeled_at TEXT NOT NULL
+);
+-- Copy the known label, not an invented earlier history. Triggers keep CLI
+-- corrections visible to the browser without a second label authority.
+INSERT INTO label_history(event_id,category,requires_action,expected_outcome,labeled_at)
+ SELECT event_id,category,requires_action,expected_outcome,labeled_at FROM event_labels;
+CREATE TRIGGER label_history_insert AFTER INSERT ON event_labels BEGIN
+ INSERT INTO label_history(event_id,category,requires_action,expected_outcome,labeled_at)
+ VALUES(NEW.event_id,NEW.category,NEW.requires_action,NEW.expected_outcome,NEW.labeled_at);
+END;
+CREATE TRIGGER label_history_update AFTER UPDATE ON event_labels BEGIN
+ INSERT INTO label_history(event_id,category,requires_action,expected_outcome,labeled_at)
+ VALUES(NEW.event_id,NEW.category,NEW.requires_action,NEW.expected_outcome,NEW.labeled_at);
+END;
+CREATE INDEX idx_label_history_event ON label_history(event_id,id);
+CREATE TABLE event_config_revisions (
+ event_id TEXT PRIMARY KEY REFERENCES events(id), revision TEXT NOT NULL
+);
+CREATE TABLE control_evaluations (
+ id TEXT PRIMARY KEY, at TEXT NOT NULL, revision TEXT NOT NULL,
+ status TEXT NOT NULL, report TEXT NOT NULL
+);
+`,
 }
 
 func (d *DB) migrate() error {
@@ -190,6 +235,9 @@ func (d *DB) migrate() error {
 	var cur int
 	if err := d.QueryRow(`SELECT COALESCE(MAX(version), 0) FROM schema_migrations`).Scan(&cur); err != nil {
 		return fmt.Errorf("read schema version: %w", err)
+	}
+	if cur > len(migrations) {
+		return fmt.Errorf("database schema %d is newer than supported schema %d", cur, len(migrations))
 	}
 	for i, m := range migrations[cur:] {
 		v := cur + i + 1

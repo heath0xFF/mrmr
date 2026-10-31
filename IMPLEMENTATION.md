@@ -5,6 +5,27 @@
 
 mrmr is an open-source runtime for connecting the events happening around you to AI-driven interpretation, deterministic policy, notifications, actions, and more capable agents.
 
+## Reading this document
+
+This document contains both milestone requirements and broader design direction.
+The current binary implements one runtime pipeline with optional source-local
+interpretation and policy contracts (`monitors`), not the independent Flow engine
+shown in later examples. Filters, connections, storage, and the safety gate remain shared. Use [README](README.md) for supported configuration and
+[SETUP](SETUP.md) for installation and verification.
+
+The current web interface has two separate access boundaries:
+
+- `/dashboard/`: private, read-only evidence and runtime visibility.
+- `/manage/`: optional single-operator authentication, configuration drafts and
+  shadow activation, source pause/resume, review, bounded evaluation, and first-run
+  setup. The Go binary embeds both interfaces.
+
+See [implemented management](#implemented-management-slice) for runtime guarantees
+and [DASHBOARD_ROADMAP.md](DASHBOARD_ROADMAP.md) for delivered and remaining work.
+Browser live promotion, effect approvals, independent Flows, source previews, and
+reusable dataset tools are not implemented. Local tests do not complete the
+required real-event quality gate or establish that a deployment is running.
+
 The core idea is simple:
 
 ```text
@@ -446,10 +467,12 @@ from starving others.
 
 mrmr has four first-class outcomes.
 
-Outcome execution is at-least-once: the runtime persists the execution intent
-*before* performing the side effect and records the result after. A crash in
-between may repeat a notification on recovery — accepted, and adapter authors
-should prefer idempotent effects where cheap.
+The runtime persists execution intent *before* performing the side effect and
+records the result after. A crash between these steps leaves an uncertain result.
+The current implementation does **not** automatically replay pending intent;
+configuration activation and rollback do not rerun Events either. Any future
+recovery mechanism must account for effects that may already have happened.
+Adapter authors should prefer idempotent effects where practical.
 
 ## Ignore
 
@@ -572,9 +595,10 @@ Its job is to decide **when an agent deserves to wake up**.
 
 ## Shadow
 
-A variant of `ignore` for going to production safely: the full pipeline runs,
-everything is persisted and traced, but no effect leaves the runtime. The
-outcome is recorded as if it had fired.
+Shadow is a modifier on a selected outcome, not another outcome adapter. The
+pipeline still collects, interprets, and persists events, but it does not dispatch
+the selected effect. Execution status records `shadow`, not successful delivery.
+Each matching rule needs its own shadow setting; a shadow default is not global.
 
 ```yaml
 default:
@@ -583,8 +607,10 @@ default:
 
 Shadow mode is how a new flow earns trust: run it for a week against real
 events, compare recorded outcomes against what you would have done manually,
-tune filters/policy thresholds, then flip it live. Because decisions and
-traces persist identically, promotion is a config change, not a rewrite.
+tune filters/policy thresholds, then separately review whether live effects are
+justified. The management UI currently accepts shadow or ignore on activation;
+it cannot promote rules live. Its separate persistent safety gate suppresses
+effects from older in-flight work too and has no browser removal control.
 
 ---
 
@@ -1019,15 +1045,96 @@ tailnet permissions control remote access; forwarded headers grant no authority.
 The dashboard cannot change configuration, labels, effects, or services. Poll
 health is process-local; the browser shows stale data on refresh failure. This
 is visibility, not independent monitoring.
-The flow editor, connection manager, and control surfaces below remain future work.
+The flow editor and broader permission/approval surfaces below remain future work.
+
+## Implemented management slice
+
+`mrmr run -control-addr 127.0.0.1:4243` adds a separate, authenticated management
+listener in the same process. `/manage/` provides Overview, Activity, Review,
+Configure, and Runtime pages. Its operator token comes from the environment and
+stays in browser memory. The read-only dashboard keeps its existing access and
+method restrictions; the management listener does not expose event ingestion.
+
+Operators can edit supported configuration through model/source/basic-policy
+forms and YAML, validate and save a revision-checked draft, compare it with the active file, and
+activate shadow-only changes. Activation prepares sources, drains current polls,
+atomically replaces the startup YAML, and publishes an immutable runtime snapshot.
+In-flight HTTP events retain their original snapshot. Shutdown joins HTTP handlers
+before closing storage; file-backed runtimes hold a database ownership lock.
+Sources retain their cursors; transport/mapping changes require a new source identity. Listener/database changes
+require restart. Prior revisions can be loaded, validated, and activated for recovery.
+A persistent return-to-shadow gate is checked immediately before adapter dispatch,
+including older in-flight work and subsequent non-management restarts. It cannot
+undo dispatched effects. A persistence failure keeps the gate closed in memory
+and reports that the operator must retry before restart. Enabling the management
+listener alone does not suppress live rules in an existing startup configuration.
+
+The startup YAML remains authoritative. Saved drafts do not affect runtime work;
+external edits are not watched and are checked for conflicts before activation.
+Listener/database changes, credentials in the process environment, and management
+access settings require restart. Automatic model readiness checks validate configuration
+and credential presence, not endpoint availability. Current configuration lists
+active monitoring sources separately from drafts. Add monitoring service selects
+source scope, a reusable model connection, and Discord/stdout notifications.
+Each `monitors[source-name]` entry owns a complete interpreter and policy/default.
+It takes precedence over global event-type interpretation and never falls through
+to shared policy. Unmapped sources retain their existing behavior. Runtime,
+evaluation, and review select the same source-local contract; executions retain
+its policy hash. Source identity, cursor ownership, and runtime lifetimes do not
+change. Configuration validation, secret redaction, and the activation safety gate
+cover all monitor entries, including paused sources. No database migration is added;
+old binaries require configuration without the new `monitors` field.
+
+The guided setup adds an explicit, source-selected, bounded synthetic interpreter-and-policy test. It sends
+no stored Events, reads no source, and runs no adapter. Test results are tied to
+the editor contents and never grant live authority. Paused sources retain their
+checkpoints but depend on upstream retention when resumed.
+
+Browser review supports the existing category/action/outcome label contract,
+deferred/uncertain states, explicit origin, CLI-aware conflicts, and label history.
+The evaluation UI saves bounded policy comparisons or interpreter-and-policy runs
+against up to 50 recently reviewed real events. It retains label snapshots and
+configuration revisions. These runs do not execute adapters or test ingestion gates.
+Policy-only comparisons require a retained, compatible historical interpretation
+contract. Evaluation jobs are bounded, cancellable, and marked interrupted after
+restart rather than replayed. No evaluation automatically grants live authority.
+
+`-setup` starts protected setup when the configuration file is absent, with no
+sources and event ingestion rejected until activation. It binds ingestion only
+to `127.0.0.1:4242` during setup and does not silently replace an invalid existing
+file. Secret provisioning remains outside the browser. Management uses a separate
+loopback listener, an environment-provisioned token, explicit JSON writes, and
+Host/Origin checks; it does not authenticate the ordinary ingestion endpoint.
+
+Schema migration 9 adds management revisions/drafts/audit/settings, review state,
+label-history triggers for CLI and browser corrections, saved evaluations, and
+Event configuration references. Migration is additive and transactional. It
+retains existing data without inventing missing origin or historical contracts.
+Opening the database through CLI commands also applies migrations. Database backup
+and binary compatibility are separate from configuration revision recovery.
+
+Still not implemented: browser live promotion or lifting the global safety gate,
+effect approvals, independent Flows, reusable dataset selection/version tools,
+full comparison analysis, and source preview/delivery tests. The management UI is
+not an operating-system service manager. See README for access and recovery limits.
 
 ## Design direction
+
+The [dashboard roadmap](DASHBOARD_ROADMAP.md) records the full target workflows
+and the current delivery status. The implemented slice prioritized configuration,
+activation/recovery, and first-run setup before completing every diagnosis,
+dataset, and evaluation feature. Its four task areas are Overview, Activity, Review, and Configure. The
+Flow, Event, Agent, and Connection concepts below fit within those areas; they
+are not four screens to build before the review loop works. The separate
+management boundary is now implemented; future controls must preserve it and
+the read-only listener. The roadmap does not mark all target capabilities as
+implemented or authorize live effects.
 
 mrmr should ship with a local web interface.
 
 The first version should avoid becoming an enormous visual-programming IDE.
 
-Start with four areas:
+The interface must cover these domain concepts as runtime support arrives:
 
 ```text
 Flows
@@ -1404,7 +1511,10 @@ Users supply their own models, infrastructure, and credentials.
 
 A Go daemon is a strong fit for the runtime because it can compile to one binary, handles concurrency well, and is straightforward to self-host.
 
-The web UI can be a separate TypeScript app embedded into the binary for release builds.
+The implemented web UI is HTML, CSS, and JavaScript embedded from
+`internal/dashboard` into the Go binary. It needs no frontend server, downloaded
+assets, or frontend build step. The layout below is design direction, not the
+current directory tree; do not add placeholder packages to match it.
 
 ```text
 mrmr/
@@ -1530,8 +1640,10 @@ v0.1 is Phase 0 plus durability — nothing more:
 
 Still deferred: Telegram and other notification adapters beyond stdout/Discord,
 cron, exec actions, permissions/approval queues, and a flow editor. HTTP polling,
-Linux system-unit journals, Discord notifications, and the read-only runtime
-dashboard have been implemented through the requested slices documented above.
+Linux system-unit journals, Discord notifications, the read-only dashboard, and
+optional authenticated management have been implemented through the requested
+slices documented above. Management includes configuration editing and shadow
+activation, but not an independent Flow editor or effect approval system.
 
 ---
 
@@ -1615,7 +1727,16 @@ At this point mrmr is useful without the UI.
 
 ## Phase 2 — local UI
 
-Add:
+Current delivery includes the read-only dashboard and protected management:
+Overview, Activity, Review, Configure, and Runtime; configuration drafts, shadow
+activation/recovery, first-run setup, source controls, labels/history, and bounded
+saved evaluation. See [Local web UI](#local-web-ui) for the implemented guarantees.
+
+This does not complete the phase. Source previews, reusable datasets, broader
+comparison tools, evidence-gated live promotion, independent Flow configuration,
+and approvals remain outside the current implementation.
+
+Full target scope:
 
 ```text
 event timeline

@@ -4,6 +4,10 @@ Use this runbook to configure and verify mrmr for someone. It is an installation
 
 **Success means a verified local installation with effects disabled—not a model certified for unattended action.**
 
+The optional management UI can handle routine configuration, source controls,
+review, and bounded evaluation after installation. This runbook retains an isolated
+CLI smoke test so setup does not depend on browser access or a production database.
+
 ## 1. Establish scope and inspect the environment
 
 Read [IMPLEMENTATION.md](IMPLEMENTATION.md), then the [README](README.md) and [example configuration](mrmr.example.yaml). Inspect the current code when behavior is unclear; roadmap examples are not necessarily supported configuration.
@@ -21,10 +25,19 @@ Ask only for missing information:
 2. **Which decision model should it use?** Confirm an OpenAI-compatible endpoint/model, TypeSafe Jev, or a verified local System One/d1 endpoint, and authorization to send data there. Use `role: decision`; hosted endpoints may incur charges and receive private event content. A worker model is a separate `role: agent` endpoint hint for an external agent harness.
 3. **Where should the installation and data live?** Default to a user-owned local directory, not a system-wide installation.
 4. **What should happen when something matters?** Record the eventual goal, but keep effects disabled during setup. Stdout and Discord notifications are built in. Discord uses a private environment-variable reference for its webhook; never put the URL in YAML or Git.
+5. **Does the user want browser management?** Confirm the loopback control port,
+   local/tunnel/private-HTTPS access, and the operator-token environment variable.
+   The token must be random and at least 32 bytes. It is separate from model keys;
+   never ask for its value in chat or return it in a handoff.
 
 If credentials are needed, ask the user to supply them through their environment or approved secret store, not chat. Record only the environment variable name and whether it is set. mrmr does not automatically load `.env` files.
 
-**Stop rather than invent support.** Native MCP polling, provider-specific webhook normalization, XML RSS parsing, approval queues, and a web configuration editor are not implemented. Explain the limitation and offer an existing ingestion path; do not build a bridge without a separate request.
+**Stop rather than invent support.** Native MCP polling, provider-specific webhook
+normalization, XML RSS parsing, approval queues, source previews, browser live
+promotion, and independent Flows are not implemented. The management UI does
+provide forms/YAML editing, drafts, shadow activation, source pause/resume, and
+revision recovery. Explain remaining limits; do not build a bridge without a
+separate request.
 
 ## 2. Prepare an isolated candidate
 
@@ -73,7 +86,9 @@ Do not add a duplicate `policy`, `default`, or other YAML key: replace the exist
 
 ## 3. Start temporarily and verify
 
-There is no `init`, `doctor`, `status`, or standalone config-validation command. Startup validates the config. Use an owned foreground terminal/session for this temporary process:
+There is no `init`, `doctor`, `status`, or standalone CLI config-validation command.
+Startup validates the config; the management UI also validates drafts. Use an
+owned foreground terminal/session for this temporary process:
 
 ```bash
 "$binary" run -config "$config"
@@ -135,6 +150,9 @@ Stop the owned process with SIGINT, restart it with the same config/database, an
 
 - **Config rejected:** fix the named supported field in the candidate. Do not weaken validation or copy unimplemented keys from the roadmap.
 - **Bind failure:** identify the existing listener; choose another loopback port rather than killing it.
+- **Database ownership failure:** another runtime may own the same database.
+  Confirm the path and process. Do not delete the lock file or start a second
+  runtime against that database; use the isolated smoke database.
 - **Connection refused or HTTP 404:** check the approved endpoint, port, model API base path, provider, and model ID. Include `/v1` when required; TypeSafe uses `https://api.typesafe.ai/v1` and mrmr appends `/systemone`.
 - **HTTP 401/403:** ask the user to correct credential provisioning. Check presence without printing the value.
 - **Invalid/errored decision:** report the model check as failed. Inspect schema compatibility and endpoint availability; do not count fallback-to-ignore as success or enable effects to diagnose it.
@@ -148,8 +166,8 @@ After the smoke test passes, prepare the intended installation in the agreed dir
 
 - Install the verified binary to the agreed path without silently overwriting an existing binary.
 - Give the final config an explicit loopback bind and an absolute, user-owned database path separate from `smoke.db`.
-- Replace the temporary always-notify policy with rules appropriate to the user's goal and `default: {ignore: true}`. Keep `shadow: true` on every rule capable of effects until the user approves activation.
-- Configure only the source the user requested. Starting it requires confirmation of the data access, model destination, and polling interval; sources fetch immediately and all sources share one pipeline.
+- Replace the temporary always-notify policy with rules appropriate to the user's goal and `default: {ignore: true}`. Keep `shadow: true` on every rule capable of effects until a separate review supports an explicitly approved live change. Browser activation remains shadow-only.
+- Configure only the source the user requested. Starting it requires confirmation of the data access, model destination, and polling interval; sources fetch immediately. Sources can have independent interpretation/policy contracts under `monitors`; filters, connections, storage, and the effect safety gate remain shared.
 - Keep files and directories holding config, logs, and data private to the user. Configuration should contain secret references, not values.
 
 For an HTTP JSON source, follow the [polling configuration](README.md#http-polling). Confirm the record array path, stable ID field, and sample payload shape without exposing private records. IDs are dedup keys; changing a record without changing its ID does not emit an update. Failed or malformed records hold the watermark for retry; permanently malformed records require correcting the source. Cursor ordering/pagination is limited, and already-persisted partial processing has no recovery replay: do not promise lossless synchronization.
@@ -170,6 +188,70 @@ The dashboard does not require a second service or model calls.
 Verify source-poll timestamps, decision errors, latency, and shadow execution
 states. Do not treat an old model success or a quiet event stream as proof of
 current model health. The dashboard cannot change labels, policy, or services.
+
+### Optional browser management
+
+Enable management in the **same** runtime, not a second daemon. For an existing,
+approved shadow-only candidate, stop the temporary process you own and start it
+with the additional listener:
+
+```bash
+"$binary" run -config "$config" -control-addr 127.0.0.1:4243
+```
+
+Provision `MRMR_CONTROL_TOKEN` first, or use `-control-token-env` for the approved
+variable name. Never print it. Open `http://localhost:4243/manage/` and let the user
+unlock with the token. The read-only `/dashboard/` remains available and gains no
+write permission. For private HTTPS, follow the dedicated management-origin
+and exact `-control-host` rules in [README](README.md#configuration-and-management-ui).
+Do not proxy the event-ingestion listener.
+
+For a **new final installation**, the user can instead use
+[first-run setup](README.md#first-run-setup) without copying a candidate YAML file.
+Use absolute final config/database paths. Setup binds ingestion to `127.0.0.1:4242`
+but rejects events and starts no sources until activation. Do not use `-setup` to
+recover an existing invalid file or expect it to restore a deleted installation.
+
+Verify the supported management workflow with synthetic data in the isolated
+installation before handing it over:
+
+1. Unlock; confirm the correct runtime, revision, and effect boundary.
+2. Edit a harmless draft change, validate, and save. Confirm the active revision
+   has not changed. Inspect the difference and explicitly activate in shadow.
+3. Confirm the new active revision. Load the prior revision, validate/save/activate
+   it, and confirm recovery. Neither operation reruns stored Events.
+4. Inspect the synthetic event and save a review with origin **synthetic**. Confirm
+   that it does not count toward the real-event evaluation gate.
+5. Lock the UI; confirm that private editor/evidence content is cleared and that
+   access again requires the operator token.
+
+Do not use **Return to shadow** as a reversible smoke-test toggle on a production
+database. It is a persistent safety stop with no supported browser removal.
+Source pause/resume takes effect through draft activation and retains its cursor;
+upstream retention still limits what can be read after a pause. Shadow does not
+prevent collection or model calls. Automatic readiness checks do not probe
+inference. The service-monitor guide has an explicit two-example synthetic model
+test; it sends no real Events and runs no adapters. It is not a source/delivery
+check or a replacement for the real-event quality gate.
+
+**Configure** shows current monitoring services, not draft additions. Use
+**Add monitoring service → Service → Model → Notifications → Test and start**.
+Reuse an existing model connection or provision a new one on the runtime host.
+Each monitor gets its own questions and shadow policy without replacing other
+monitors. Confirm the scope before activation. Existing names, cursors, and paused
+states stay intact. Missing model credentials and example identities block tests
+and activation. The guide supports system units only, not user-unit journals.
+
+Discord uses a named webhook environment variable, normally
+`MRMR_DISCORD_WEBHOOK_URL`. Never paste its URL into the browser or YAML. Shadow
+setup can retain a missing Discord reference, but it is not ready for delivery.
+The synthetic model test sends no messages. Live promotion and authorized delivery
+tests remain separate work. A configuration containing `monitors` needs the new
+binary; retain a compatible YAML backup before upgrade or binary rollback.
+
+Use **Advanced configuration** for custom interpretation/filter/agent settings
+and other source types. Forms replace YAML formatting and comments. Enabling management
+on an existing configuration does not itself disable its live rules.
 
 ### Optional ambient investigation setup
 
@@ -196,12 +278,26 @@ investigation is in scope. Do not install or activate an agent implicitly.
 Pause for explicit approval before:
 
 - Removing shadow from any notification, HTTP action, emit-event, or delegation rule.
-- Binding beyond loopback or changing firewall/network access. The API has **no authentication**, and callers can trigger configured policy.
+- Enabling operator access or changing its private proxy route/token provisioning.
+- Binding beyond loopback or changing firewall/network access. Event ingestion has
+  **no authentication**, even when management is authenticated, and callers can
+  trigger configured policy.
 - Installing/enabling a background service, autostart, or lingering; stopping/replacing an existing service; or making system-wide changes.
 
 Show exactly which effects/targets, bind address, source schedule, or service would become active. There is no built-in permission or approval queue: these are human setup decisions, not commands mrmr can enforce later.
 
-If persistent operation is approved, use the host's existing service manager; the README provides a [systemd example](README.md#deployment). Use absolute paths and explicitly provision credential references in the service environment. Shell exports are not automatically inherited by a service. Verify its startup, event trace, and stop/restart behavior; provide the exact service commands to the user.
+If persistent operation is approved, use the host's existing service manager; the
+README provides a [systemd example](README.md#deployment), including optional
+management. Use absolute paths and explicitly provision credentials in the service
+environment. Shell exports are not automatically inherited by a service. Verify
+startup, event traces, private UI access if enabled, and stop/restart behavior.
+Provide the exact service commands to the user.
+
+Before opening an existing database with the new binary or CLI, follow the
+[upgrade and backup procedure](README.md#upgrade-and-backup). Migration 9 adds
+management/review storage without deleting existing events or cursors. Configuration
+rollback does not reverse schema changes; never delete a database to resolve an
+upgrade or activation error.
 
 Without approval, leave the installation configured but stopped. Stop only processes you started. Remove only your own disposable smoke artifacts after their results are recorded and the installed binary/config no longer depend on their paths.
 
@@ -211,9 +307,21 @@ Provide a concise report with no secrets or private event payloads:
 
 - **State:** configured/stopped, temporarily running, or service enabled; whether all effects remain shadowed.
 - **Paths:** installed binary, final config, database, and service/log locations if applicable.
-- **Commands:** exact start, stop, inspect, and restart commands for this installation. State that config changes require restart.
-- **Verified:** build/tests, real model decision status, stored trace and shadow execution, duplicate suppression before/after restart, and final source verification (or explicitly pending).
+- **Commands and access:** exact start, stop, inspect, and restart commands. If
+  management is enabled, include its private URL and token variable name, never
+  the value. State which changes can use draft activation and which require
+  restart: listener/database changes, environment updates, and external file edits.
+- **Verified:** build/tests, real model decision status, stored trace and shadow
+  execution, duplicate suppression before/after restart, final source verification,
+  and management draft/activation/recovery checks if enabled. Mark anything not
+  actually checked as pending.
 - **Not verified / blockers:** unsupported integrations, credentials not provisioned, source not yet connected, or approval still required.
-- **Next quality gate:** collect and label at least 50 representative real events and measure accuracy/false-ignore rate using the [evaluation workflow](README.md#inspect-label-and-evaluate). Agree acceptance thresholds with the user. Generated examples and this smoke test do not satisfy that gate; evaluation grades all four intended outcomes and skips pre-model filters; it never invokes workers or effects.
+- **Next quality gate:** collect and label at least 50 representative real events
+  and measure accuracy/false-ignore rate using browser Review/evaluation or the
+  [CLI workflow](README.md#inspect-label-and-evaluate). Browser evaluations use up
+  to 50 recently reviewed real events, not a reusable, coverage-checked dataset.
+  Agree acceptance thresholds and review coverage with the user. Generated examples
+  and this smoke test do not satisfy that gate; evaluation skips ingestion gates
+  and never invokes workers or effects. No result authorizes browser live promotion.
 
 Never summarize a successful synthetic check as “production ready.” The runtime still lacks crash-recovery replay, lossless polling, and a permission/approval layer. Make those limits visible before the user trusts unattended effects.

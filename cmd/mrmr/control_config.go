@@ -1,0 +1,513 @@
+package main
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"net/http"
+	"net/url"
+	"os"
+	"reflect"
+	"regexp"
+	"strings"
+	"time"
+
+	"github.com/heath0xff/mrmr/internal/config"
+	"github.com/heath0xff/mrmr/internal/policy"
+	"github.com/heath0xff/mrmr/internal/runtime"
+	"github.com/heath0xff/mrmr/internal/source"
+	"gopkg.in/yaml.v3"
+)
+
+type sourceJob func(context.Context, <-chan struct{}, *runtime.Runtime)
+type configDraft struct {
+	YAML     string `json:"yaml"`
+	Revision string `json:"revision"`
+	Base     string `json:"base"`
+}
+type configRequest struct {
+	YAML     string `json:"yaml"`
+	Expected string `json:"expected"`
+	Base     string `json:"base"`
+	Confirm  bool   `json:"confirm"`
+}
+
+func (m *manager) prepare(ctx context.Context, c *config.Config) ([]sourceJob, error) {
+	var jobs []sourceJob
+	for _, s := range c.Sources {
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("Source readiness check was canceled.")
+		}
+		if s.Paused {
+			continue
+		}
+		switch s.Type {
+		case "http-poller":
+			p, err := source.NewHTTPPoller(s)
+			if err != nil {
+				return nil, fmt.Errorf("HTTP source readiness failed; check URL mapping and credential references.")
+			}
+			jobs = append(jobs, p.RunUntil)
+		case "systemd-journal":
+			p, err := source.NewJournal(ctx, s, m.db)
+			if err != nil {
+				return nil, fmt.Errorf("Journal readiness failed; check platform, access, and saved cursor.")
+			}
+			jobs = append(jobs, p.RunUntil)
+		default:
+			return nil, fmt.Errorf("Unsupported source type.")
+		}
+	}
+	return jobs, nil
+}
+func (m *manager) startSources(jobs []sourceJob, rt *runtime.Runtime) {
+	m.stopSources = make(chan struct{})
+	stop := m.stopSources
+	for _, job := range jobs {
+		m.sources.Add(1)
+		go func() { defer m.sources.Done(); job(m.ctx, stop, rt) }()
+	}
+}
+func (m *manager) activeRevision() string {
+	if s := m.current.Load(); s != nil {
+		return s.revision
+	}
+	return revision("")
+}
+
+// Management refuses literal credentials instead of trying to round-trip a
+// redacted file. Endpoint locations are configuration; secret values belong
+// in environment variables provisioned outside the browser.
+var inlineSecret = regexp.MustCompile(`(?i)(bearer\s+\S+|(?:token|password|secret|api[_-]?key)\s*[=:]\s*[^\s,;"']+)`)
+
+func managementSafe(b []byte) error {
+	if len(b) > 256<<10 {
+		return fmt.Errorf("Configuration exceeds 256 KiB.")
+	}
+	var doc any
+	if err := yaml.Unmarshal(b, &doc); err != nil {
+		return fmt.Errorf("Invalid YAML; check indentation, duplicate keys, and field types.")
+	}
+	var walk func(any) error
+	walk = func(v any) error {
+		switch v := v.(type) {
+		case map[string]any:
+			for k, x := range v {
+				l := strings.ToLower(k)
+				if l == "token" || l == "password" || l == "secret" || l == "api_key" || l == "authorization" || l == "webhook_url" {
+					return fmt.Errorf("Inline credentials are not allowed; use environment references.")
+				}
+				if err := walk(x); err != nil {
+					return err
+				}
+			}
+		case []any:
+			for _, x := range v {
+				if err := walk(x); err != nil {
+					return err
+				}
+			}
+		case string:
+			if inlineSecret.MatchString(v) {
+				return fmt.Errorf("Possible inline credential detected; use environment references.")
+			}
+			if strings.HasPrefix(v, "http://") || strings.HasPrefix(v, "https://") {
+				u, e := url.Parse(v)
+				if e == nil && (u.User != nil || strings.Contains(u.Path, "/api/webhooks/")) {
+					return fmt.Errorf("Credential-bearing URLs are not allowed in managed configuration.")
+				}
+			}
+		}
+		return nil
+	}
+	if err := walk(doc); err != nil {
+		return err
+	}
+	// Detect values of configured secret references, including accidental copies
+	// inside prompts or comments. Never echo the matched value in an error.
+	c, err := config.Parse(b)
+	if err == nil {
+		names := []string{}
+		for _, v := range c.Models {
+			names = append(names, v.APIKeyEnv)
+		}
+		for _, v := range c.Sources {
+			names = append(names, v.BearerTokenEnv)
+		}
+		for _, p := range c.Policies() {
+			for _, v := range p.Rules {
+				if v.Then.Notify != nil {
+					names = append(names, v.Then.Notify.WebhookEnv)
+				}
+			}
+			if p.Default.Notify != nil {
+				names = append(names, p.Default.Notify.WebhookEnv)
+			}
+		}
+		for _, n := range names {
+			if n != "" {
+				if value := os.Getenv(n); value != "" && strings.Contains(string(b), value) {
+					return fmt.Errorf("Configuration contains a credential value; only its environment reference may be stored.")
+				}
+			}
+		}
+	}
+	return nil
+}
+func managedParse(text string) (*config.Config, error) {
+	if err := managementSafe([]byte(text)); err != nil {
+		return nil, err
+	}
+	c, err := config.Parse([]byte(text))
+	if err != nil {
+		return nil, fmt.Errorf("Configuration is invalid. Check required fields, model roles, source mappings, and policy rules against the supported schema.")
+	}
+	return c, nil
+}
+
+func (m *manager) route(w http.ResponseWriter, r *http.Request) error {
+	switch {
+	case r.Method == "GET" && r.URL.Path == "/manage/api/state":
+		var draft configDraft
+		err := m.db.QueryRow(`SELECT yaml,revision,base FROM control_draft WHERE singleton=1`).Scan(&draft.YAML, &draft.Revision, &draft.Base)
+		if err != nil && err != sql.ErrNoRows {
+			return fmt.Errorf("Cannot read draft.")
+		}
+		active := ""
+		if s := m.current.Load(); s != nil {
+			active = s.yaml
+		}
+		var history []map[string]any
+		rows, err := m.db.Query(`SELECT id,created_at,status,base FROM control_revisions ORDER BY created_at DESC LIMIT 30`)
+		if err != nil {
+			return fmt.Errorf("Cannot read configuration history.")
+		}
+		for rows.Next() {
+			var id, at, status, base string
+			if err := rows.Scan(&id, &at, &status, &base); err != nil {
+				rows.Close()
+				return fmt.Errorf("Cannot read revision.")
+			}
+			history = append(history, map[string]any{"id": id, "at": at, "status": status, "base": base})
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return fmt.Errorf("Cannot read revisions.")
+		}
+		var doc any
+		if active != "" {
+			yaml.Unmarshal([]byte(active), &doc)
+		}
+		connections := []map[string]string{}
+		credential := func(name string) string {
+			if name == "" {
+				return "not required"
+			}
+			if os.Getenv(name) == "" {
+				return "missing"
+			}
+			return "configured (not tested)"
+		}
+		if snap := m.current.Load(); snap != nil {
+			for name, model := range snap.cfg.Models {
+				connections = append(connections, map[string]string{"name": name, "kind": "model", "credential": credential(model.APIKeyEnv)})
+			}
+			// Presence is not delivery readiness. Never return webhook values.
+			seen := map[string]bool{}
+			for _, p := range snap.cfg.Policies() {
+				outcomes := []policy.Then{p.Default}
+				for _, rule := range p.Rules {
+					outcomes = append(outcomes, rule.Then)
+				}
+				for _, outcome := range outcomes {
+					if n := outcome.Notify; n != nil && n.Via == "discord" && !seen[n.WebhookEnv] {
+						seen[n.WebhookEnv] = true
+						connections = append(connections, map[string]string{"name": n.WebhookEnv, "kind": "Discord", "credential": credential(n.WebhookEnv)})
+					}
+				}
+			}
+			for _, source := range snap.cfg.Sources {
+				if source.Type == "http-poller" {
+					connections = append(connections, map[string]string{"name": source.Name, "kind": "HTTP source", "credential": credential(source.BearerTokenEnv)})
+				}
+			}
+		}
+		return controlJSON(w, map[string]any{"connections": connections, "active": active, "revision": m.activeRevision(), "draft": draft, "history": history, "document": doc, "setup": m.current.Load() == nil, "shadow_override": m.blocked.Load(), "bootstrap": map[string]any{"Server": m.bootstrap.Server, "DB": m.bootstrap.DB}})
+	case r.Method == "GET" && r.URL.Path == "/manage/api/revision":
+		var text string
+		if err := m.db.QueryRow(`SELECT yaml FROM control_revisions WHERE id=?`, r.URL.Query().Get("id")).Scan(&text); err != nil {
+			return fmt.Errorf("Revision not found.")
+		}
+		return controlJSON(w, map[string]string{"yaml": text})
+	case r.Method == "POST" && r.URL.Path == "/manage/api/compose":
+		var req struct {
+			Document map[string]any `json:"document"`
+		}
+		if err := decodeControl(w, r, &req); err != nil {
+			return err
+		}
+		b, err := yaml.Marshal(req.Document)
+		if err != nil {
+			return fmt.Errorf("Cannot encode configuration.")
+		}
+		if err := managementSafe(b); err != nil {
+			return err
+		}
+		return controlJSON(w, map[string]string{"yaml": string(b)})
+	case r.Method == "POST" && (r.URL.Path == "/manage/api/validate" || r.URL.Path == "/manage/api/draft" || r.URL.Path == "/manage/api/activate"):
+		var req configRequest
+		if err := decodeControl(w, r, &req); err != nil {
+			return err
+		}
+		c, err := managedParse(req.YAML)
+		if err != nil {
+			return err
+		}
+		var doc any
+		yaml.Unmarshal([]byte(req.YAML), &doc)
+		if r.URL.Path == "/manage/api/validate" {
+			return controlJSON(w, map[string]any{"valid": true, "document": doc, "revision": revision(req.YAML), "notice": "Validation makes no model calls and does not prove source or model availability."})
+		}
+		if req.Base != m.activeRevision() {
+			http.Error(w, "Active configuration changed. Reload before saving.", 409)
+			return nil
+		}
+		if r.URL.Path == "/manage/api/draft" {
+			tx, err := m.db.Begin()
+			if err != nil {
+				return fmt.Errorf("Cannot save draft.")
+			}
+			defer tx.Rollback()
+			var prior string
+			err = tx.QueryRow(`SELECT revision FROM control_draft WHERE singleton=1`).Scan(&prior)
+			if err != nil && err != sql.ErrNoRows {
+				return fmt.Errorf("Cannot read draft revision.")
+			}
+			if prior != req.Expected {
+				http.Error(w, "Draft changed in another session. Reload before saving.", 409)
+				return nil
+			}
+			id := revision(req.YAML)
+			if _, err = tx.Exec(`INSERT INTO control_draft VALUES(1,?,?,?) ON CONFLICT(singleton) DO UPDATE SET yaml=excluded.yaml,revision=excluded.revision,base=excluded.base`, req.YAML, id, req.Base); err != nil {
+				return fmt.Errorf("Cannot save draft.")
+			}
+			if _, err = tx.Exec(`INSERT INTO control_audit(at,actor,operation,target,result) VALUES(?,'operator','save-draft',?,'saved')`, time.Now().UTC().Format(time.RFC3339Nano), id); err != nil {
+				return fmt.Errorf("Cannot audit draft.")
+			}
+			if err = tx.Commit(); err != nil {
+				return fmt.Errorf("Cannot commit draft.")
+			}
+			return controlJSON(w, configDraft{req.YAML, id, req.Base})
+		}
+		if !req.Confirm {
+			return fmt.Errorf("Confirm collection scope, data destination, and the displayed configuration diff before activation.")
+		}
+		var saved configDraft
+		if err = m.db.QueryRow(`SELECT yaml,revision,base FROM control_draft WHERE singleton=1`).Scan(&saved.YAML, &saved.Revision, &saved.Base); err != nil || saved.Revision != req.Expected || saved.YAML != req.YAML || saved.Base != req.Base {
+			http.Error(w, "Save this exact draft against the active revision before applying it.", 409)
+			return nil
+		}
+		if err = m.activate(r.Context(), c, req.YAML, req.Base); err != nil {
+			return err
+		}
+		return controlJSON(w, map[string]string{"revision": m.activeRevision()})
+	case r.Method == "POST" && r.URL.Path == "/manage/api/shadow":
+		var req struct {
+			Confirm bool `json:"confirm"`
+		}
+		if err := decodeControl(w, r, &req); err != nil {
+			return err
+		}
+		if !req.Confirm {
+			return fmt.Errorf("Confirm the safety change.")
+		}
+		// Close the gate before writing: a storage failure must not reopen effects.
+		m.blocked.Store(true)
+		tx, err := m.db.Begin()
+		if err != nil {
+			return fmt.Errorf("Effects blocked in memory, but persistence failed. Retry before restarting.")
+		}
+		defer tx.Rollback()
+		if _, err = tx.Exec(`INSERT INTO control_settings VALUES('shadow','true') ON CONFLICT(name) DO UPDATE SET value='true'`); err != nil {
+			return fmt.Errorf("Cannot persist safety gate; retry before restarting.")
+		}
+		if _, err = tx.Exec(`INSERT INTO control_audit(at,actor,operation,target,result) VALUES(?,'operator','return-to-shadow','effects','blocked')`, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+			return fmt.Errorf("Effects blocked in memory, but the safety audit could not be saved. Retry before restarting.")
+		}
+		if err = tx.Commit(); err != nil {
+			return fmt.Errorf("Cannot commit safety gate; retry before restarting.")
+		}
+		return controlJSON(w, map[string]bool{"shadow_override": true})
+	case r.Method == "POST" && r.URL.Path == "/manage/api/test-model":
+		return m.testModel(w, r)
+	case r.Method == "GET" && r.URL.Path == "/manage/api/audit":
+		rows, err := m.db.Query(`SELECT at,actor,operation,target,result FROM control_audit ORDER BY id DESC LIMIT 100`)
+		if err != nil {
+			return fmt.Errorf("Cannot read audit.")
+		}
+		defer rows.Close()
+		out := []map[string]string{}
+		for rows.Next() {
+			var at, actor, op, target, result string
+			if rows.Scan(&at, &actor, &op, &target, &result) != nil {
+				return fmt.Errorf("Cannot decode audit.")
+			}
+			out = append(out, map[string]string{"at": at, "actor": actor, "operation": op, "target": target, "result": result})
+		}
+		if rows.Err() != nil {
+			return fmt.Errorf("Cannot read audit.")
+		}
+		return controlJSON(w, out)
+	default:
+		return m.reviewRoute(w, r)
+	}
+}
+
+func (m *manager) activate(ctx context.Context, c *config.Config, text, base string) (resultErr error) {
+	// Network binding and database relocation require a supervised process
+	// restart. Refuse them here rather than claiming a partial activation.
+	if c.Server != m.bootstrap.Server || c.DB != m.bootstrap.DB {
+		return fmt.Errorf("Listener and database changes require a process restart; keep the current server and db settings.")
+	}
+	for _, p := range c.Policies() {
+		for _, r := range p.Rules {
+			if r.Then.Outcome() != "ignore" && !r.Then.Shadow {
+				return fmt.Errorf("Management activation requires shadow effects. Live promotion needs reviewed evaluation evidence.")
+			}
+		}
+		if p.Default.Outcome() != "ignore" && !p.Default.Shadow {
+			return fmt.Errorf("Default effects must remain in shadow.")
+		}
+	}
+	if old := m.current.Load(); old != nil {
+		for _, before := range old.cfg.Sources {
+			if before.Type == "systemd-journal" && !before.Paused {
+				cursor, err := m.db.Cursor(before.Name)
+				if err != nil || cursor == "" {
+					return fmt.Errorf("An active journal checkpoint is missing. Refusing to reset its position during activation.")
+				}
+			}
+			for _, after := range c.Sources {
+				if before.Name != after.Name {
+					continue
+				}
+				// A renamed source starts a new cursor. Reusing an old cursor against a
+				// different transport or item mapping can silently skip unrelated data.
+				a, b := before, after
+				a.Every = 0
+				b.Every = 0
+				a.Paused = false
+				b.Paused = false
+				a.Priority = ""
+				b.Priority = ""
+				a.Units = nil
+				b.Units = nil
+				if !reflect.DeepEqual(a, b) {
+					return fmt.Errorf("A source identity or mapping changed. Use a new source name and explicitly accept a new cursor.")
+				}
+			}
+		}
+	}
+	disk, err := os.ReadFile(m.path)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("Cannot inspect config file.")
+	}
+	if revision(string(disk)) != base {
+		return fmt.Errorf("Configuration was changed outside the UI. Restart with the external file or restore the active version before applying.")
+	}
+	// Retain checkpoints for existing names; remove only fresh preparation
+	// checkpoints if activation fails before the revision becomes active.
+	fresh := []string{}
+	runningNames := map[string]bool{}
+	if old := m.current.Load(); old != nil {
+		for _, s := range old.cfg.Sources {
+			runningNames[s.Name] = !s.Paused
+		}
+	}
+	for _, s := range c.Sources {
+		var exists bool
+		if err := m.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM source_cursors WHERE name=?)`, s.Name).Scan(&exists); err != nil {
+			return fmt.Errorf("Cannot read source checkpoint.")
+		}
+		// An active poller may create its first checkpoint during preparation.
+		// Never delete its progress, or an existing deliberately empty cursor.
+		if !exists && !runningNames[s.Name] {
+			fresh = append(fresh, s.Name)
+		}
+	}
+	activated := false
+	defer func() {
+		if !activated {
+			for _, name := range fresh {
+				if _, err := m.db.Exec(`DELETE FROM source_cursors WHERE name=?`, name); err != nil {
+					resultErr = fmt.Errorf("Activation did not complete and checkpoint cleanup failed. Inspect source cursors before retrying.")
+				}
+			}
+		}
+	}()
+	if err := managementModelReady(c); err != nil {
+		return err
+	}
+	prepareCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	jobs, err := m.prepare(prepareCtx, c)
+	cancel()
+	if err != nil {
+		return err
+	}
+	if ctx.Err() != nil {
+		return fmt.Errorf("Activation request canceled before changes.")
+	}
+	old := m.current.Load()
+	if m.stopSources != nil {
+		close(m.stopSources)
+		m.sources.Wait()
+	}
+	// After draining, old runners can be restarted without preparing or resetting
+	// their checkpoints if a file conflict or storage failure prevents activation.
+	resume := func() {
+		if old != nil {
+			m.startSources(old.jobs, old.rt)
+		}
+	}
+	disk, err = os.ReadFile(m.path)
+	if (err != nil && !os.IsNotExist(err)) || revision(string(disk)) != base {
+		resume()
+		return fmt.Errorf("Configuration changed while sources drained. No revision was activated.")
+	}
+	if ctx.Err() != nil {
+		resume()
+		return fmt.Errorf("Activation canceled; previous configuration retained.")
+	}
+	id := revision(text)
+	if err = m.audit("activate", id, "intent"); err != nil {
+		resume()
+		return fmt.Errorf("Cannot audit activation; previous configuration retained.")
+	}
+	if _, err = m.db.Exec(`INSERT INTO control_revisions(id,yaml,created_at,status,base) VALUES(?,?,?,'prepared',?) ON CONFLICT(id) DO UPDATE SET status='prepared'`, id, text, time.Now().UTC().Format(time.RFC3339Nano), base); err != nil {
+		resume()
+		return fmt.Errorf("Cannot store revision.")
+	}
+	committed, syncErr := replaceConfig(m.path, text)
+	if !committed {
+		resume()
+		return fmt.Errorf("Configuration file update failed. Previous revision remains active.")
+	}
+	snap := m.snapshot(c, text)
+	snap.jobs = jobs
+	m.current.Store(snap)
+	activated = true
+	m.startSources(jobs, snap.rt)
+	// The file is startup authority. A crash after its rename is reconciled from
+	// that file on boot; audit may retain intent rather than invent completion.
+	if _, err = m.db.Exec(`UPDATE control_revisions SET status='active' WHERE id=?`, id); err != nil {
+		return fmt.Errorf("Configuration is active, but history update failed. Reload status before retrying.")
+	}
+	if err = m.audit("activate", id, "active"); err != nil {
+		return fmt.Errorf("Configuration is active, but completion audit failed.")
+	}
+	if syncErr != nil {
+		return fmt.Errorf("Configuration is active, but directory sync failed. Verify disk health before restarting.")
+	}
+	return nil
+}

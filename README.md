@@ -22,6 +22,10 @@ loop lets a model choose its next task and tools. mrmr does neither: determinist
 policy can delegate bounded work, then observe its externally completed result as
 another event. The agent is one possible effect, not the root of the system.
 
+[Quick start](#quick-start) · [Management UI](#configuration-and-management-ui) ·
+[Agent-assisted setup](SETUP.md) · [Operational limits](#operational-limits) ·
+[Dashboard roadmap](DASHBOARD_ROADMAP.md)
+
 ## How it works
 
 The diagram shows the **implemented pipeline**, not the entire roadmap. All ingestion paths use the same runtime; no MCP server, message broker, or agent framework is required.
@@ -47,7 +51,7 @@ flowchart TD
     Valid -->|No| Ignore
     Valid -->|Yes| Policy["Deterministic policy<br/>First matching rule, otherwise default"]
     Policy --> Intent["Persist execution intent<br/>Failure suppresses effect"]
-    Intent --> Shadow{"Selected outcome<br/>has shadow enabled?"}
+    Intent --> Shadow{"Selected outcome is shadowed<br/>or safety gate blocks effects?"}
     Shadow -->|Yes| Suppress["Record intended outcome<br/>Do not execute"]
     Shadow -->|No| Outcome{"Outcome"}
 
@@ -63,7 +67,7 @@ flowchart TD
     Act --> Record
     Delegate --> Record
     Suppress --> Record
-    Record --> Inspect["Inspect and review<br/>CLI + SQLite audit trail"]
+    Record --> Inspect["Inspect and review<br/>Web UI + CLI + SQLite audit trail"]
 ```
 
 - **Sources detect, not judge.** The HTTP poller turns each JSON record into an ordinary Event; the journal source emits only selected unit/severity records. External integrations can submit normalized events through the API.
@@ -77,21 +81,30 @@ Processing is currently **synchronous**: an API request waits for the pipeline, 
 
 ## Current status
 
-mrmr is early-stage software with a working vertical slice, HTTP polling, and a built-in Linux system-journal source.
+mrmr is early-stage software with a working event pipeline and an optional,
+authenticated management UI. One Go binary serves both the management UI and
+the separate read-only dashboard; no frontend service is required.
 
 | Area | Available now |
 | --- | --- |
 | Ingestion | `POST /api/events`; HTTP JSON polling; selected Linux system-journal events |
-| Storage | SQLite events, decisions, executions, traces, source cursors, and human labels |
+| Storage | SQLite events, decisions, executions, traces, source cursors, labels/history, configuration revisions, evaluations, and operator audit |
 | Interpretation | Decision providers: Choice, Yes/No, Score via System One (Jev/local d1) or OpenAI-compatible inference; legacy prompt/schema supported |
 | Filtering | Scalar `eq` / `neq` checks on event fields |
 | Policy | ANDed conditions, first-match rules, explicit default |
 | Outcomes | Ignore, stdout/Discord notify, HTTP action, emit-event, HTTP delegation with opt-in structured completion events, shadow |
-| Review | Parent/child inspection, labels/export, decision vs structured-output evaluation, confusion, precision/recall, probability buckets, false-ignore rate |
-| Dashboard | Private read-only activity, source-poll health, policy boundaries, event traces, and model request latency |
+| Review | Browser and CLI labels, correction history, deferred/uncertain states, explicit real/synthetic/unknown origin, conflict checks, and CLI dataset export |
+| Evaluation | Saved browser policy comparisons and bounded interpreter evaluations; CLI accuracy, confusion, precision/recall, probability buckets, and false-ignore metrics |
+| Management | Protected first-run setup; model/source/basic-policy forms and YAML; drafts, validation, differences, shadow activation, source pause/resume, revision recovery, and a persistent safety gate |
+| Read-only dashboard | Private activity, source-poll health, policy boundaries, event traces, unfinished intents, and model request latency |
 | Connections | Standalone Superhuman OAuth login and read-only connection check; email polling is not implemented yet |
 
-**Not implemented:** MCP polling or tool calls, native SaaS integrations, built-in cron, XML RSS parsing, Telegram and other notification adapters beyond stdout/Discord, exec actions, permission/approval queues, a flow/configuration editor, multiple independently routed flows, or hot reload.
+**Not implemented:** browser live promotion, effect approvals, source previews,
+reusable dataset selection tools, multiple independently routed Flows, or automatic
+file-watch reload. MCP polling/tool calls, native SaaS integrations, built-in cron,
+XML RSS parsing, exec actions, and notification adapters beyond stdout/Discord also
+remain planned. Explicit management activation is available; it is not a general
+Flow engine or an operating-system service manager.
 
 The included 50-event evaluation set is generated. The required quality gate—at least 50 labeled **real** events, with measured accuracy and false-ignore rate—has not yet been completed. A passing test suite is not evidence that a model is ready to make judgments on your events.
 
@@ -112,10 +125,41 @@ You need:
 - **Go 1.27**, as declared in [go.mod](go.mod).
 - A decision endpoint: **OpenAI-compatible** `/chat/completions`, **native System One** (such as local d1), or a TypeSafe account for Jev. The shipped quick-start config uses OpenAI-compatible inference. For local d1 on CPU or CUDA BF16, start with the [local d1 recipe](recipes/local-d1/README.md). Any hosted endpoint receives the event content sent for interpretation.
 
-Build and configure:
+Build the single binary:
 
 ```bash
 go build -o mrmr ./cmd/mrmr
+```
+
+Choose **browser setup** or **file-based setup**. Both use the same configuration
+validator and event pipeline.
+
+### Browser setup
+
+Use an installation directory without an existing `mrmr.yaml`. Provision a random
+operator token of at least 32 bytes as `MRMR_CONTROL_TOKEN` in the process environment
+through your approved secret store. Do not put it in YAML, a URL, or chat. mrmr does
+not load `.env` files automatically.
+
+```bash
+./mrmr run -config mrmr.yaml -setup -setup-db mrmr.db \
+  -control-addr 127.0.0.1:4243
+```
+
+Open **http://localhost:4243/manage/** and unlock with that token. **Configure**
+shows the current configuration. Choose **Add monitoring service** to select a
+system service, connect a real model, choose notifications, and test in shadow.
+For an initial check without collection, use **Advanced configuration** with
+sources absent or paused. Collection remains disabled until activation. The
+example does not start a model server or prove that your endpoint works.
+
+Use the synthetic request below to check the model and inspect the result in
+**Activity**. See [management access and recovery](#configuration-and-management-ui)
+for remote access, an existing installation, and source configuration.
+
+### File-based setup
+
+```bash
 cp mrmr.example.yaml mrmr.yaml
 ```
 
@@ -135,7 +179,10 @@ Open **http://localhost:4242/dashboard/** to view source health, stored events,
 shadow outcomes, and model request latency. For a remote runtime, use
 [private HTTPS through Tailscale Serve](#private-https-with-tailscale-serve).
 
-In another terminal, send an event:
+### Verify an event
+
+After browser activation or file-based startup, send a synthetic event from
+another terminal:
 
 ```bash
 curl --fail-with-body http://127.0.0.1:4242/api/events \
@@ -153,7 +200,11 @@ curl --fail-with-body http://127.0.0.1:4242/api/events \
   }'
 ```
 
-The example policy notifies stdout when the model classifies an incident with confidence above `0.85`; otherwise it ignores. The actual outcome depends on your model's judgment.
+The file-based example notifies stdout when the model classifies an incident
+with confidence above `0.85`; otherwise it ignores. Browser setup uses a shadowed
+incident notification and an ignore default. The actual outcome depends on your
+configuration and the model's judgment. HTTP 200 alone does not prove successful
+interpretation; inspect the Decision status and trace.
 
 The JSON response includes `event_id` and `trace`, plus `decision`, `outcome`, or `duplicate` when applicable. Inspect a newly stored event using its returned ID:
 
@@ -167,7 +218,12 @@ Repeating the request with the same source and `source_event_id` returns a dupli
 
 [mrmr.example.yaml](mrmr.example.yaml) is the complete starting point. One YAML file configures one shared filter/policy pipeline, model endpoints, HTTP agent targets, and polling sources. `interpret_by_type` can replace the interpreter contract for an exact event type. All events still use the same ingestion path; there is no `on:`-based flow routing.
 
-Configuration is validated at startup; unknown YAML keys and unsupported adapter types are errors. Restart to apply changes.
+Configuration is validated at startup and before management activation; unknown
+YAML keys and unsupported adapter types are errors. With management enabled, use
+**Configure** to validate/save/activate supported changes without restarting.
+Saving a draft alone does not change the runtime. External file edits are not
+watched: restart to load them. Listener/database changes and environment updates
+also require a restart.
 
 ### Filter first, interpret second
 
@@ -482,13 +538,280 @@ The [complete shadow-mode example](recipes/homelab-journal/mrmr.example.yaml) in
 
 Journal content may contain credentials or private application data. Unit filtering is not secret redaction. Start with shadow, use an approved model endpoint, and review selected records before trusting this source. Avoid selecting mrmr's own unit; the adapter excludes its current process's journal messages to prevent immediate feedback.
 
+## Configuration and management UI
+
+The optional management listener serves **Overview, Activity, Review, Configure,
+and Runtime** at `/manage/`. It is separate from the read-only dashboard and
+never exposes the event-ingestion endpoint.
+
+For an existing installation:
+
+```sh
+# Provision MRMR_CONTROL_TOKEN in the service's private environment first.
+# Use a random value of at least 32 bytes; do not put it in YAML or a URL.
+mrmr run -config mrmr.yaml -control-addr 127.0.0.1:4243
+```
+
+Open **http://localhost:4243/manage/** and enter that token. The page keeps it
+only in memory, not browser storage or a cookie. Reloading requires unlocking
+again. `Lock` clears the editor and event evidence. Use HTTPS when accessing a
+remote host, or forward the loopback port with SSH:
+
+```sh
+ssh -N -L 127.0.0.1:4243:127.0.0.1:4243 your-host
+```
+
+For a private HTTPS proxy, also set `-control-host your-host.your-tailnet.ts.net`.
+Use a dedicated private HTTPS origin, such as an unused HTTPS port, and forward
+that origin to `127.0.0.1:4243`. The UI requests both `/manage/*` and
+`/dashboard/api/*`; forwarding only `/manage/` is not sufficient. Preserve existing
+routes, including the read-only dashboard, and never proxy the ingestion listener
+or enable Funnel. The proxy hostname does not bypass token authentication. `-control-token-env` selects another environment
+variable. Token rotation requires a restart; never commit the token.
+
+### Access and startup options
+
+| Flag | Default | Purpose |
+| --- | --- | --- |
+| `-config` | `mrmr.yaml` | Startup YAML and the file replaced on activation |
+| `-control-addr` | Disabled | Literal loopback IP and nonzero port for management |
+| `-control-host` | Empty | One exact lowercase private proxy hostname, without a scheme, path, or port |
+| `-control-token-env` | `MRMR_CONTROL_TOKEN` | Environment variable containing the operator token |
+| `-setup` | `false` | Allow protected setup when the configuration file is absent; requires management |
+| `-setup-db` | `mrmr.db` | Database path used only for first-run setup |
+
+Keep the configuration file and its parent directory writable by the service
+account; activation uses atomic file replacement. A managed config cannot be a
+symlink. Use absolute config/database paths in services. Flags configure the
+management listener; they are not YAML fields.
+
+This is single-operator access, not a multi-user session or role system. Data
+requests require a bearer token; writes also require explicit JSON control headers
+and pass Host/Origin checks. Tailnet membership alone does not authorize changes.
+Locking clears browser-held credentials and private content, including late
+responses. It does not revoke the token or cancel work already accepted by the
+runtime. Use evaluation cancellation for a running evaluation.
+
+### What the management UI can do
+
+- Inspect source health, model request history, events, traces, and related events.
+  Event pages use a fixed receive-time boundary so new ingestion does not shift
+  the pages. Search again to include newer arrivals.
+- Set up one system-service monitor through **Connect a model → Choose a
+  service → Test and start**. The guide selects the interpreter, installs typed
+  questions and a provider-compatible shadow policy, and keeps existing source
+  names/cursors. More complex pipelines stay in **Advanced configuration**.
+- Edit models, sources, and basic ordered policy rules in Advanced, or use the
+  complete YAML editor. Forms update the draft only and replace YAML formatting
+  and comments. Advanced interpretation, policy, filter, and agent fields remain
+  available in YAML. Common inline credential forms are rejected. Use environment
+  references; never paste secrets into the editor.
+- Validate, save a draft, inspect its difference from the active configuration,
+  and activate it **in shadow**. Draft and active revisions detect stale edits.
+  Invalid configuration and failed readiness checks retain the running revision.
+- Pause/resume or remove a source through the draft. Source names retain their
+  cursors. A transport or mapping change requires a new source identity; a new
+  journal starts at its current tail. User-service journal collection is not supported.
+- Load a prior revision into the editor, then validate/save/activate to roll back.
+  Rollback changes future work, not existing events or effects already sent.
+- Review events, record expected category/action/outcome, mark origin as real,
+  synthetic, or unknown, and defer uncertain cases. Browser writes check the
+  current label revision, including changes made by the CLI. Label history is
+  retained; a review never reruns the event.
+- Compare draft policy against compatible stored Decisions, or run the existing
+  interpreter-and-policy evaluator against up to 50 recently reviewed real events.
+  One job runs at a time, with a ten-minute deadline and cancellation. Reports
+  retain event IDs, label snapshots, candidate revision, and per-event results.
+  They exclude ingestion filters, deduplication, depth checks, and adapter delivery.
+  Old events without a retained interpretation contract cannot be used for policy-only
+  comparison. Interpreter evaluation may contact only active configured models.
+- Return all effects to shadow, including work still interpreting under an older
+  revision. This safety gate survives restart, including a restart without the
+  management listener. It cannot recall effects already dispatched. This release
+  intentionally provides **no browser control to lift the safety gate or promote
+  rules live**.
+
+### Current configuration and monitoring services
+
+**Configure** opens **Current configuration**. It lists active sources, their
+model selections, notification destinations, pause state, and shadow/live rules.
+A saved or unsaved draft is not shown as running. Enabled collection is not proof
+of source health; check Overview. **Edit monitor** changes one system-journal
+monitor. **Pause collection** and **Resume collection** ask for confirmation,
+then save and activate the source change. They do not stop the watched service.
+Pending drafts require explicit replacement consent.
+
+Choose **Add monitoring service → Service → Model → Notifications → Test and
+start**. Select exact Linux system units, severity, and poll interval. User-service
+journals, including user-run Hermes services, are not supported yet.
+
+Reuse a named model connection without entering its credential reference again,
+or connect another model with a new name. The runtime must reach its API base
+URL; `localhost` means the runtime host. Shared connection edits remain in
+Advanced. Provision credentials outside the browser and restart the service to
+load them. Never paste a key or webhook URL into these fields.
+
+Choose **Discord channel** or **Runtime log (stdout)**. Discord uses a stored
+`webhook_env` reference, normally `MRMR_DISCORD_WEBHOOK_URL`; each reference can
+select a different channel. Missing Discord credentials do not prevent shadow
+setup, but are shown as missing in the active configuration. Presence is not a
+delivery test. Default alert text contains the service, source, and Event ID,
+not raw journal text. Mentions and link previews remain disabled.
+
+The guide creates or replaces only the selected monitor's questions and rules:
+category, action needed, and severity. Incident plus action needed selects a shadow
+notification; otherwise ignore. System One providers use editable confidence/action
+thresholds, initially 0.85. OpenAI-compatible generated answers use the boolean
+action answer, not invented probabilities. Other monitors, shared filters, agents,
+and legacy rules stay intact. A paused source remains paused. Use Advanced to
+retain custom questions or edit rules outside this standard service contract.
+Adding from Current configuration starts from active state. **Add a monitor to
+this draft** in Advanced retains earlier draft edits; activation applies those
+edits too. Review the full difference before confirming.
+
+**Test model with synthetic examples** explicitly authorizes two fixed examples
+to the displayed candidate endpoint, with at most six HTTP attempts and a
+30-second deadline. It uses no stored Events, source reads, or adapters. Its
+intent/result is audited; the detailed result stays in browser memory and is
+invalidated by edits or reload. Valid responses prove connectivity, not correct
+judgment; answer/outcome mismatches are shown separately. No test promotes effects.
+
+After a successful connection test, review scope and confirm **Start in shadow**
+(or **Apply monitor in shadow**). This saves and activates the exact draft using the same
+revision and source-readiness checks as Advanced. Activation rejects placeholder
+interpreters, invalid model base URLs, and missing credential references. Model
+HTTP clients do not follow redirects, including outside setup; configure the final
+endpoint directly. Real-event quality and notification delivery need separate checks.
+The test selects one explicit source, even when several sources use the same Event
+type. Its response and audit identify that source. It never sends a Discord message.
+
+#### Source-local contracts
+
+The optional `monitors` map is keyed by an existing source name. Each entry has a
+complete `interpret`, `policy`, and `default`, using the same shapes as the shared
+pipeline. Its interpreter takes precedence over `interpret_by_type`; its policy
+default is final and never falls through to shared rules. Sources without an entry
+keep the legacy interpreter/type-override and policy behavior. Runtime ingestion,
+CLI evaluation, browser review, and saved policy comparisons use the same selection.
+Execution records retain the selected policy hash and parent Event.
+
+Shared pre-model filters still apply to every source. Models, agents, storage,
+and the effect safety gate remain shared. This is source-local configuration, not
+a general Flow engine or a security boundary against forged `Event.source` values.
+Keep ingestion access restricted. No database migration is needed. Old binaries
+cannot read `monitors`: remove those entries or restore a compatible configuration
+before rolling back the binary. Do not restore SQLite just to undo configuration.
+
+### Change and recover configuration
+
+For custom pipelines, open **Advanced configuration**.
+
+1. Open **Configure → Advanced configuration**. Check the active revision. The editor loads the saved draft
+   if one exists; use **Load active into editor** to start from the running version.
+2. Edit the forms or YAML. Validate after manual YAML edits to refresh the forms.
+   Use **Set all draft effects to shadow** when adapting a configuration with live rules.
+3. Save the draft and inspect the difference. Saving does not activate it. Recheck
+   source scope and model destinations: shadow still collects data and calls models.
+4. Confirm activation. Wait for readiness checks and source draining, then verify
+   the active revision and new source/event evidence in Overview and Activity.
+5. To recover, load a prior revision into the editor, validate, save, and activate
+   it under the same shadow-only rules. A prior live configuration cannot bypass
+   the activation restriction.
+
+Advanced also exposes pause/resume as a source setting in the draft. It takes effect only on activation;
+pausing one source does not stop HTTP ingress or other sources. Resuming retains
+its cursor, but the upstream feed or journal must still retain the missed records.
+**Return to shadow** is different: it blocks effects without stopping collection.
+It is a durable safety stop, not a reversible test toggle in this UI.
+
+If an operation reports a conflict, preserve your unsaved text privately before
+reloading. Reconcile with the latest saved/active revision rather than repeatedly
+submitting a stale draft. If activation times out or reports a completion/audit
+failure, reload runtime state and check the active revision before retrying;
+the file switch may already have completed. If persisting the safety gate fails,
+effects remain blocked in memory, but you must resolve the error and retry before
+restarting to make that protection durable.
+
+The active YAML file remains startup authority. Activation writes it through a
+private, synced temporary file and atomic rename. Sources drain their current
+poll before switching; managed polls have a two-minute total deadline. In-flight
+HTTP events keep their original runtime revision. The UI records activation intent
+before changing the file; after a crash, startup reconciles the active revision
+from that file rather than replaying unfinished work. External YAML changes are
+checked before replacement. Do not edit the file outside mrmr during activation;
+ordinary text editors do not participate in its revision check.
+
+File-backed runtimes take a database ownership lock so a second runtime cannot
+run the same sources against that database. CLI inspection and labeling remain
+available. Management requires a persistent filesystem database path, not a
+SQLite memory database or URI. Back up SQLite before upgrading; configuration
+rollback does not reverse database migrations. Keep backups private.
+
+Listener and database changes require a process restart. The management UI does
+not run shell commands, restart system services, enroll secrets, or provide an
+OS administration panel. Model/source readiness is not proof of useful decisions
+or successful notification delivery. Automatic activation checks validate model
+configuration and credential presence, not endpoint availability. The explicit
+synthetic setup test makes bounded inference calls; ordinary validation does not. Configurations containing inline
+credentials must be converted to environment references before enabling management.
+Enabling management on an existing installation does not itself shadow live
+rules. Review them before startup; browser activation accepts only shadow or ignore.
+
+### Upgrade and backup
+
+Before using a new binary against an existing database, stop its runtime and
+other writers and make a consistent private SQLite backup, plus a copy of its
+configuration and binary. Do not copy only the main database file while it is
+running in WAL mode; use a SQLite-aware backup or copy after a clean shutdown.
+
+This update adds **schema migration 9** for drafts/revisions, audit and safety
+settings, review state, label history, saved evaluations, and event configuration
+references. Existing Events, Decisions, Executions, labels, and cursors are kept.
+The known current label is copied into history; earlier corrections, unknown
+origin, and missing historical configurations are not reconstructed. Opening the
+database with a CLI command also applies pending migrations, even without management.
+
+Do not run an older binary against a schema it does not support. Restoring an old
+database can lose all records since that backup; it is not configuration rollback.
+The new runtime rejects a database schema newer than it supports. Do not remove
+its `.runtime.lock` file to bypass an ownership error; stop the other owner first.
+
+### First-run setup
+
+Provision the operator token in the process environment before starting, as
+shown in the access instructions above.
+
+```sh
+mrmr run -config mrmr.yaml -setup -setup-db mrmr.db \
+  -control-addr 127.0.0.1:4243
+```
+
+Use this only when `mrmr.yaml` does not exist. The setup instance binds ingestion
+to `127.0.0.1:4242`, but rejects events and starts no sources until activation.
+Configure opens an empty current-configuration page. **Add monitoring service**
+starts the guide with no assumed working endpoint. Advanced retains an inactive
+example for manual editing; its placeholder model
+cannot be activated. The database path and listener remain fixed for this process. An existing invalid file is not silently overwritten by setup.
+
+The broader [dashboard roadmap](DASHBOARD_ROADMAP.md) still includes work beyond
+this release: richer guided forms, effect-free source previews, frozen reusable
+dataset selections, model-comparison analysis, and evidence-gated live promotion.
+The current evaluation UI is not a live-promotion approval system.
+
 ## Read-only dashboard
+
+See the [dashboard roadmap](DASHBOARD_ROADMAP.md) for its path from read-only
+visibility to human review, evaluation, safe configuration, and guided setup.
+The roadmap separates current management controls from the remaining work.
 
 With `mrmr run` active, open **http://localhost:4242/dashboard/** (use your configured port).
 The HTML, CSS, and JavaScript are embedded in the Go binary. Local access needs
 no frontend service, build tool, external asset, or extra configuration.
 The page names the runtime host and works on desktop and phone screens.
-It cannot change labels, configuration, policy, or services.
+It cannot change labels, configuration, policy, or services. Event links retain
+search, filter, and page position; browser Back and Forward restore that context.
+Search text and event IDs appear in the URL and browser history, so do not share
+links that contain private search terms.
 
 The dashboard requires a loopback peer and a local Host header by default,
 even when the ingestion listener binds more broadly. Proxy headers do not
@@ -549,7 +872,9 @@ The page refreshes every 10 seconds while visible and shows:
   that exceed three intervals (at least 30 seconds) are marked overdue, not dead.
   A source can complete a batch while individual model calls fail.
 - Searchable events in 50-row pages, with separate decision and execution states,
-  unlabeled/error/shadow filters, and full event inspection.
+  unlabeled/error/shadow/ignore/unfinished-intent filters, and full event inspection.
+- Current model roles and interpreter selection, including event-type overrides,
+  without exposing endpoint URLs or credential references.
 - Exact repeated messages in the latest 1,000 events, without classifying them
   as harmless. Summary messages are shortened after redaction.
 - Configured policy conditions and shadow boundaries, without effect arguments.
@@ -566,14 +891,17 @@ count Decisions, not attempts. Historical records work without replay or new
 model calls. No samples means unknown, not zero.
 
 The latest recorded success does not prove that a model is reachable now.
-Poll health resets on process restart; historical poll failures are not stored
+Poll health resets on process restart or management activation; historical poll failures are not stored
 by this view. A dashboard served by mrmr cannot independently alert when mrmr
 is down.
 
 Read endpoints: `GET /dashboard/api/overview`,
 `GET /dashboard/api/events?q=TEXT&view=all&offset=0`, and
 `GET /dashboard/api/event?id=EVENT_ID`. Views are `all`, `unlabeled`,
-`shadow`, `ignore`, and `errors`. Queries have a five-second context deadline;
+`shadow`, `ignore`, `pending`, and `errors`. An optional RFC3339 `before` parameter
+pins the receive-time boundary; keep the returned `before` value when requesting
+later pages. The management Activity view uses this boundary to avoid page shifts
+from new arrivals. Queries have a five-second context deadline;
 responses are capped at 4 MiB. Event detail includes `event_json`, a redacted
 display string that preserves large JSON numbers without browser rounding.
 These routes never ingest events, call models, write labels, or execute effects.
@@ -581,8 +909,9 @@ These routes never ingest events, call models, write labels, or execute effects.
 All responses disable caching. URLs, common credential fields, and configured
 secret values are redacted. Arbitrary event text can still contain private
 information: this is not a public-safe export. Keep host, tailnet, and tunnel access private.
-The upgrade adds two transactional indexes for recent-event and decision queries;
-it does not rewrite events or change policy. Back up SQLite before upgrading.
+The original read-only slice added two indexes for recent-event and decision
+queries. The management update adds the separate migration described under
+[upgrade and backup](#upgrade-and-backup); neither rewrites historical Events.
 
 ## Inspect, label, and evaluate
 
@@ -606,7 +935,10 @@ Capture real events, label the expected judgment, then export a dataset:
 ./mrmr eval -config mrmr.yaml -dataset testdata/real-eval.jsonl
 ```
 
-Relabeling replaces the previous label. Labels support `ignore`, `notify`, `act`, and `delegate`. Decision-model labeling validates the configured `category` Choice, including the exact event-type override for completion events. Evaluation grades intended outcomes; it does not benchmark worker execution.
+Relabeling replaces the current label and retains corrections in label history.
+Existing labels are retained when the new migration runs. Browser review also
+records origin and deferred/uncertain state; a CLI label alone does not establish
+real-origin eligibility for browser evaluation. Labels support `ignore`, `notify`, `act`, and `delegate`. Decision-model labeling validates the configured `category` Choice, including the exact event-type override for completion events. Evaluation grades intended outcomes; it does not benchmark worker execution.
 
 For prompt development before real data is available:
 
@@ -676,7 +1008,7 @@ verified; offline tests do not establish it.
 
 **Use on a trusted local network, initially with ignore, stdout, or shadow outcomes.**
 
-- **No API authentication.** Prefer a loopback bind. For remote access, use a trusted private network and appropriate access controls; do not expose port 4242 directly to the internet. Ingestion can trigger configured actions.
+- **No event-ingestion authentication.** Management authentication does not protect `POST /api/events`. Prefer a loopback bind. For remote access, use a trusted private network and appropriate access controls; do not expose port 4242 directly to the internet. Ingestion can trigger configured actions.
 - **No permission or approval layer yet.** Configured policy is the current authority boundary. There is no approval queue, automatic stale-event action downgrade, or action sandbox.
 - **Persistence is not crash recovery.** There is no queue replay for half-processed events. Execution intent is stored before effects; failures to store intent suppress the effect. A crash can leave a pending execution, lose a completion before it is stored, or leave a partial trace. Pending work is not automatically retried. Deduplication is not an exactly-once execution guarantee.
 - **Polling is deliberately basic.** No general pagination, arbitrary cursor ordering, or durable ingestion retry queue. Slow interpretation delays the next record in that source.
@@ -720,7 +1052,25 @@ systemctl --user enable --now mrmr
 journalctl --user -u mrmr -f
 ```
 
-A user service needs lingering enabled if it should remain running after logout. The unit above does not provision secrets; arrange their environment separately before starting an authenticated setup.
+To enable management for this same service, use these settings under `[Service]`.
+Replace its `ExecStart` and provide the token through a private environment file:
+
+```ini
+EnvironmentFile=%h/.config/mrmr/runtime.env
+ExecStart=%h/mrmr/mrmr run -config %h/mrmr/mrmr.yaml -control-addr 127.0.0.1:4243
+```
+
+Replace the original `ExecStart`; do not add a second one or start a second runtime.
+Create the environment file through your approved secret workflow, restrict it to
+the service account (mode `0600`), and keep it outside Git. Include the operator
+token and any model/source/notification variables the configuration references.
+Shell exports do not automatically reach a systemd user service. Add `-control-host`
+only for the approved private HTTPS proxy hostname. See [first-run setup](#first-run-setup)
+if the configuration file does not exist yet.
+
+A user service needs lingering enabled if it should remain running after logout.
+Ask before enabling it. Verify the service and private UI after restart; a source
+build or browser test is not evidence of a deployment.
 
 ## Roadmap
 
@@ -728,9 +1078,14 @@ The [development phases](IMPLEMENTATION.md#development-phases) are the source of
 
 1. **Prove the loop:** complete real-event evaluation of the core pipeline.
 2. **Useful daemon:** expand sources, notifications, actions, retries, and permissions. HTTP polling is already implemented.
-3. **Local UI:** event timeline, trace inspection, configuration, approvals, and health.
+3. **Local UI:** read-only inspection and optional protected management are available, including drafts, shadow activation, review, bounded evaluation, and first-run setup. Reusable datasets, source previews, and evidence-gated live promotion remain. Effect approvals need runtime permission support.
 4. **Real integrations:** build adapters from actual dogfooding needs, including an MCP poller.
 5. **Delegation and ecosystem:** native agent integrations and asynchronous completion delivery; synchronous HTTP completion events are available now. SDKs only when real implementations justify them.
+
+The [dashboard roadmap](DASHBOARD_ROADMAP.md) defines the operator journeys and
+incremental delivery gates: improve the current system first, then expand what
+it watches. It keeps the existing read-only boundary intact and adds separate,
+protected controls.
 
 mrmr is not a general-purpose workflow engine, an agent framework, or an MCP platform. The core stays small: **Source → Event → Interpreter → Decision → Policy → Outcome → Adapter.**
 
@@ -738,8 +1093,19 @@ mrmr is not a general-purpose workflow engine, an agent framework, or an MCP pla
 
 ```bash
 go test ./...
+go test -race ./...
 go build ./...
+go vet ./...
+node internal/dashboard/navigation.test.cjs
+
+# Optional: requires Chrome and Node.js 22+; uses temporary synthetic data.
+MRMR_CHROME=/path/to/chrome go test ./cmd/mrmr -run TestManagementBrowser
 ```
+
+The browser test covers phone/desktop navigation, model/source/policy forms,
+draft activation and rollback, hostile event text, exact numeric identities,
+review, and locking while a response body is still pending. Lifecycle tests also
+check signal shutdown with an in-flight HTTP event and database ownership.
 
 Code lives under `cmd/mrmr` (CLI and HTTP server) and `internal` (configuration, source, event, filter, model, policy, runtime, and storage). Tests use local fixtures and mock HTTP servers; no real model endpoint or credentials are required.
 

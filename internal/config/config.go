@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"net"
 	"net/url"
@@ -21,6 +22,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/heath0xff/mrmr/internal/agent"
+	"github.com/heath0xff/mrmr/internal/event"
 	"github.com/heath0xff/mrmr/internal/filter"
 	"github.com/heath0xff/mrmr/internal/model"
 	"github.com/heath0xff/mrmr/internal/policy"
@@ -45,7 +47,9 @@ type Interpret = model.Interpretation
 // a misplaced option cannot silently broaden ingestion. Secrets are env
 // references, never values stored in this configuration.
 type Source struct {
-	Name           string        `yaml:"name"`
+	Name string `yaml:"name"`
+	// Pausing preserves the source identity and its durable cursor for resume.
+	Paused         bool          `yaml:"paused,omitempty"`
 	Type           string        `yaml:"type"`
 	URL            string        `yaml:"url"`              // may reference {{ .cursor }}
 	Every          time.Duration `yaml:"every"`            // min 1s: protects the polled target
@@ -83,6 +87,14 @@ func JournalPriority(name string) (int, bool) {
 
 type Agent = agent.Config
 
+// Monitor binds interpretation and policy to one configured Source. Connections
+// remain shared, but a monitor's unmatched decisions never enter another policy.
+// This is source-local routing, not a second worker or a branching Flow engine.
+type Monitor struct {
+	Interpret Interpret     `yaml:"interpret"`
+	Policy    policy.Policy `yaml:",inline"`
+}
+
 type Config struct {
 	Server Server `yaml:"server"`
 	DB     DB     `yaml:"db"`
@@ -104,6 +116,8 @@ type Config struct {
 	// Sources are pull-based ingesters; each runs its own goroutine and
 	// feeds the same pipeline as POST /api/events.
 	Sources []Source `yaml:"sources"`
+	// Omission retains the legacy pipeline, including exact event-type overrides.
+	Monitors map[string]Monitor `yaml:"monitors,omitempty"`
 }
 
 // Load reads, parses, and validates the config at path. Defaults (addr,
@@ -117,11 +131,20 @@ func Load(path string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read config %s: %w", path, err)
 	}
+	return Parse(b)
+}
+
+// Parse is shared by startup, drafts, and evaluation. No caller activates a
+// partially decoded document, and extra YAML documents must not be ignored.
+func Parse(b []byte) (*Config, error) {
 	var c Config
 	d := yaml.NewDecoder(bytes.NewReader(b))
 	d.KnownFields(true)
 	if err := d.Decode(&c); err != nil {
-		return nil, fmt.Errorf("parse config %s: %w", path, err)
+		return nil, fmt.Errorf("parse config: %w", err)
+	}
+	if err := d.Decode(new(any)); err != io.EOF {
+		return nil, fmt.Errorf("config must contain exactly one YAML document")
 	}
 	if c.Server.Addr == "" {
 		c.Server.Addr = ":4242"
@@ -142,6 +165,32 @@ func (c *Config) InterpreterFor(eventType string) Interpret {
 		return spec
 	}
 	return c.Interpret
+}
+
+// A source-local contract takes precedence over global event-type overrides.
+// Evaluation and review must use the same selection as operational ingestion.
+func (c *Config) InterpreterForEvent(e event.Event) Interpret {
+	if monitor, ok := c.Monitors[e.Source]; ok {
+		return monitor.Interpret
+	}
+	return c.InterpreterFor(e.Type)
+}
+
+func (c *Config) PolicyForEvent(e event.Event) policy.Policy {
+	if monitor, ok := c.Monitors[e.Source]; ok {
+		return monitor.Policy
+	}
+	return c.Policy
+}
+
+// Policies includes inactive/paused monitors too: credential redaction and the
+// activation safety boundary cannot depend on whether a source polls today.
+func (c *Config) Policies() []policy.Policy {
+	out := []policy.Policy{c.Policy}
+	for _, monitor := range c.Monitors {
+		out = append(out, monitor.Policy)
+	}
+	return out
 }
 
 func (c *Config) validateInterpretation() error {
@@ -392,20 +441,34 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("config: source %q: event_type is required", s.Name)
 		}
 	}
-	for i, r := range c.Policy.Rules {
-		if len(r.If) == 0 {
-			return fmt.Errorf("config: policy rule %d: empty if", i+1)
+	for name, monitor := range c.Monitors {
+		if !seenSources[name] {
+			return fmt.Errorf("config: monitor %q must reference a configured source", name)
 		}
-		if err := validateThen(r.Then, fmt.Sprintf("policy rule %d", i+1)); err != nil {
+		candidate := *c
+		candidate.Interpret = monitor.Interpret
+		if err := candidate.validateInterpretation(); err != nil {
+			return fmt.Errorf("config: monitor %q: %w", name, err)
+		}
+	}
+	for _, p := range c.Policies() {
+		for i, r := range p.Rules {
+			if len(r.If) == 0 {
+				return fmt.Errorf("config: policy rule %d: empty if", i+1)
+			}
+			if err := validateThen(r.Then, fmt.Sprintf("policy rule %d", i+1)); err != nil {
+				return err
+			}
+		}
+		// Policy identity must be serializable before executions can reference it.
+		if _, err := json.Marshal(p); err != nil {
+			return fmt.Errorf("config: policy must be JSON-compatible: %w", err)
+		}
+		if err := validateThen(p.Default, "default"); err != nil {
 			return err
 		}
 	}
-	// Policy identity must be stable and serializable before executions can
-	// reference it; YAML-only map keys or non-finite values would lose identity.
-	if _, err := json.Marshal(c.Policy); err != nil {
-		return fmt.Errorf("config: policy must be JSON-compatible: %w", err)
-	}
-	return validateThen(c.Policy.Default, "default")
+	return nil
 }
 
 // Effect destinations are fixed configuration, never templates or credentials.

@@ -1,6 +1,40 @@
 'use strict';
 const $ = id => document.getElementById(id);
-const state = {offset: 0, query: '', view: 'all', controller: null, detailController: null, selected: null, timer: null, lastAt: null};
+const state = {before: '', offset: 0, query: '', view: 'all', controller: null, detailController: null, selected: null, timer: null, lastAt: null};
+const views = new Set(['all', 'unlabeled', 'shadow', 'ignore', 'pending', 'errors']);
+// Search text and event IDs stay in the URL so links and browser history restore context.
+function readLocation() {
+  const params = new URLSearchParams(location.search), offset = Number(params.get('offset'));
+  state.before = params.get('before') || '';
+  if (state.before && !Number.isFinite(Date.parse(state.before))) state.before = '';
+  state.query = (params.get('q') || '').slice(0, 200);
+  state.view = views.has(params.get('view')) ? params.get('view') : 'all';
+  state.offset = Number.isInteger(offset) && offset >= 0 && offset <= 100000 ? offset : 0;
+  $('query').value = state.query; $('view').value = state.view;
+  return (params.get('event') || '').slice(0, 200);
+}
+function locationFor(event = state.selected) {
+  const params = new URLSearchParams();
+  if (state.query) params.set('q', state.query);
+  if (state.view !== 'all') params.set('view', state.view);
+  if (state.offset) params.set('offset', state.offset);
+  if (state.before) params.set('before', state.before);
+  if (event) params.set('event', event);
+  const query = params.toString();
+  return `${location.pathname}${query ? `?${query}` : ''}#activity`;
+}
+function navigate() { history.pushState(null, '', locationFor()); }
+// Only describe outcomes supported by the stored execution; missing results
+// cannot establish whether an external effect occurred.
+function executionSummary(x) {
+  if (x.status === 'filtered') return 'Ignored by a pre-model filter; no model decision was required.';
+  if (x.status === 'pending') return `${x.outcome} intent is unfinished; the effect may or may not have occurred.`;
+  if (x.status === 'shadow') return `${x.outcome} was recorded in shadow; no adapter effect was performed.`;
+  if (x.status === 'error') return `${x.outcome} failed; inspect the recorded error and trace.`;
+  if (x.status === 'ok' && x.outcome === 'ignore') return 'Ignore was recorded; inspect the Decision and trace for the reason.';
+  if (x.status === 'ok') return `${x.outcome}: the adapter reported success. This does not prove downstream work completed.`;
+  return `${x.outcome || 'Outcome'}: ${x.status || 'status not recorded'}.`;
+}
 const node = (tag, text, className) => {
   const el = document.createElement(tag);
   if (text !== undefined) el.textContent = text;
@@ -40,10 +74,21 @@ function renderOverview(data) {
   document.title = `${data.hostname || 'Runtime'} · mrmr`;
   $('connection').className = 'connection live';
   $('connection').textContent = `Runtime answered · ${stamp(data.at)} · refreshes every 10 seconds`;
-  $('runtime-evidence').textContent = `Process started ${stamp(data.started_at)}.`;
+  $('runtime-evidence').textContent = `Runtime view started ${stamp(data.started_at)}. Poll evidence resets on restart or configuration activation.`;
   $('totals').replaceChildren();
-  for (const [value, label] of [[s.events, 'stored events'], [s.unlabeled, 'unlabeled'], [s.shadow, 'shadow executions'], [s.ignored, 'ignore executions'], [s.pending, 'pending']]) {
-    const item = node('span'); item.append(node('strong', value), document.createTextNode(` ${label}`)); $('totals').append(item);
+  for (const [value, label, view] of [[s.events, 'stored events', 'all'], [s.unlabeled, 'unlabeled', 'unlabeled'], [s.shadow, 'shadow executions'], [s.ignored, 'ignore executions'], [s.pending, 'pending executions']]) {
+    const item = node(view ? 'a' : 'span');
+    item.append(node('strong', value), document.createTextNode(` ${label}`));
+    if (view) {
+      item.href = `${location.pathname}${view === 'all' ? '' : `?view=${view}`}#activity`;
+      item.dataset.keepId = `total:${view}`;
+      item.addEventListener('click', event => {
+        if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+        event.preventDefault(); $('query').value = ''; $('view').value = view; search();
+        $('activity').scrollIntoView({block: 'start'});
+      });
+    }
+    $('totals').append(item);
   }
   $('totals').append(node('span', 'All time · includes test events', 'totals-note'));
   $('latency-window').textContent = `Latest ${s.window.toLocaleString()} decisions · percentiles from successful decisions only`;
@@ -71,7 +116,8 @@ function renderOverview(data) {
     const now = new Date(data.at), started = date(h.started_at), finished = date(h.finished_at);
     const threshold = Math.max(30000, source.every_ms * 3);
     let status = 'Waiting for first poll', tone = '';
-    if (h.running) {
+    if (source.paused) { status = 'Paused · cursor retained'; tone = 'shadow'; }
+    else if (h.running) {
       status = started && now - started > threshold ? 'Poll running longer than expected' : 'Poll in progress';
       tone = started && now - started > threshold ? 'shadow' : '';
     } else if (h.failed) { status = 'Last poll failed · check service logs'; tone = 'error'; }
@@ -79,7 +125,7 @@ function renderOverview(data) {
       status = now - finished > threshold ? 'No recent completed poll' : 'Last poll completed';
       tone = now - finished > threshold ? 'shadow' : 'ok';
     }
-    if (!started && now - new Date(data.started_at) > threshold) { status = 'First poll not observed'; tone = 'shadow'; }
+    if (!source.paused && !started && now - new Date(data.started_at) > threshold) { status = 'First poll not observed'; tone = 'shadow'; }
     sourceStates.push(`${source.name}: ${status.toLowerCase()}`);
     el.append(node('h3', source.name), node('p', status, `state ${tone}`));
     el.append(node('p', `Last success ${age(h.last_success, now)}`, 'help'));
@@ -97,9 +143,24 @@ function renderOverview(data) {
   }
   $('source-status').textContent = sourceStates.join(' · ') || 'No pull sources configured; HTTP ingress only.';
   if (!data.sources.length) $('sources').append(node('p', 'No pull sources configured. Events can still arrive through the HTTP API.'));
+  $('configuration').replaceChildren();
+  $('configuration').append(node('p', `Default interpreter: ${data.interpreter || 'not configured'}`));
+  for (const [eventType, model] of Object.entries(data.interpret_overrides || {}).sort(([a], [b]) => a.localeCompare(b))) {
+    $('configuration').append(node('p', `${eventType} → ${model}`, 'help'));
+  }
+  for (const [source, model] of Object.entries(data.monitor_interpreters || {}).sort(([a], [b]) => a.localeCompare(b))) {
+    $('configuration').append(node('p', `Monitor ${source} → ${model} (source-local contract)`, 'help'));
+  }
+  for (const model of data.models || []) {
+    const el = node('details'); el.dataset.keepId = `configured-model:${model.name}`;
+    el.append(node('summary', `${model.name} · ${model.role}`));
+    el.append(node('p', `${model.provider || 'Provider not specified'} · ${model.model || 'Model not specified'}`));
+    $('configuration').append(el);
+  }
+  if (!data.models?.length) $('configuration').append(node('p', 'No models configured.', 'help'));
   const effects = data.policy.filter(rule => rule.outcome !== 'ignore');
   const live = effects.filter(rule => !rule.shadow).length;
-  $('policy-summary').textContent = live ? `${live} effect rule(s) are LIVE. This dashboard cannot change them.` : effects.length ? 'All configured effect rules are shadowed. Nothing leaves the runtime through these rules.' : 'Policy selects ignore only.';
+  $('policy-summary').textContent = data.effects_blocked ? 'Operator safety gate is active. Effects are suppressed before adapter dispatch, including older in-flight work.' : live ? `${live} effect rule(s) are LIVE. This dashboard cannot change them.` : effects.length ? 'All configured effect rules are shadowed. Nothing leaves the runtime through these rules.' : 'Policy selects ignore only.';
   $('policy-summary').className = live ? 'warning' : '';
   $('policy').replaceChildren();
   for (const rule of data.policy) {
@@ -126,19 +187,26 @@ function emptyRow(target, columns, text) {
   const row = node('tr'), cell = node('td', text, 'empty'); cell.colSpan = columns; row.append(cell); $(target).append(row);
 }
 function renderEvents(page) {
+  state.before = page.before || '';
+  const currentURL = new URL(location.href);
+  if (state.before) currentURL.searchParams.set('before', state.before);
+  history.replaceState(null, '', currentURL);
   // Preserve keyboard position when a periodic refresh replaces the row nodes.
   const focused = document.activeElement?.dataset.eventId;
   $('events-body').replaceChildren();
   for (const e of page.events) {
     const row = node('tr'), received = node('td', age(e.ingested_at)); received.title = stamp(e.ingested_at);
     row.setAttribute('role', 'row'); row.classList.toggle('selected', state.selected === e.id);
-    const content = node('td'), button = node('button', e.subject || e.type, 'event-open');
-    button.type = 'button'; button.dataset.eventId = e.id;
-    button.setAttribute('aria-pressed', String(state.selected === e.id));
-    button.addEventListener('click', () => openEvent(e.id, true));
+    const content = node('td'), button = node('a', e.subject || e.type, 'event-open');
+    button.href = locationFor(e.id); button.dataset.eventId = e.id;
+    if (state.selected === e.id) button.setAttribute('aria-current', 'true');
+    button.addEventListener('click', event => {
+      if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      event.preventDefault(); state.selected = e.id; navigate(); openEvent(e.id, true);
+    });
     content.append(button, node('span', `${e.source} · ${e.type}`, 'event-source'), node('span', e.message || '(No message field)', 'event-message'));
     const outcome = node('td');
-    const label = e.execution_status === 'shadow' ? `${e.outcome} · shadow` : e.execution_status === 'pending' ? `${e.outcome} · pending` : e.execution_status === 'error' ? `${e.outcome} · error` : e.outcome || 'No execution yet';
+    const label = ['shadow', 'pending', 'error', 'filtered'].includes(e.execution_status) ? `${e.outcome} · ${e.execution_status}` : e.outcome || 'No execution yet';
     outcome.append(node('span', label, `state outcome-state ${e.execution_status === 'shadow' ? 'shadow' : e.execution_status === 'error' ? 'error' : ''}`));
     outcome.append(node('span', `Decision: ${e.decision_status || 'not recorded'}${e.labeled ? ' · labeled' : ' · unlabeled'}`, `secondary ${['errored', 'invalid'].includes(e.decision_status) ? 'state error' : ''}`));
     row.append(received, content, outcome, node('td', ms(e.latency_ms)));
@@ -159,7 +227,7 @@ async function refresh() {
   const timeout = setTimeout(() => controller.abort(), 8000);
   $('refresh').disabled = true;
   try {
-    const params = new URLSearchParams({q: state.query, view: state.view, offset: state.offset});
+    const params = new URLSearchParams({q: state.query, view: state.view, offset: state.offset, before: state.before});
     const [overview, page] = await Promise.all([get('overview', controller.signal), get(`events?${params}`, controller.signal)]);
     if (state.controller !== controller) return;
     renderOverview(overview); renderEvents(page);
@@ -177,13 +245,15 @@ async function refresh() {
   }
 }
 function search() {
-  state.offset = 0; state.query = $('query').value.trim(); state.view = $('view').value; refresh();
+  state.before = ''; state.offset = 0; state.query = $('query').value.trim(); state.view = $('view').value;
+  closeDetail(false); navigate(); refresh();
 }
 async function openEvent(id, moveFocus = false) {
   state.selected = id; state.detailController?.abort();
-  for (const button of $('events-body').querySelectorAll('button')) {
+  for (const button of $('events-body').querySelectorAll('.event-open')) {
     const selected = button.dataset.eventId === id;
-    button.setAttribute('aria-pressed', String(selected)); button.closest('tr').classList.toggle('selected', selected);
+    if (selected) button.setAttribute('aria-current', 'true'); else button.removeAttribute('aria-current');
+    button.closest('tr').classList.toggle('selected', selected);
   }
   const controller = new AbortController(); state.detailController = controller;
   const timeout = setTimeout(() => controller.abort(), 8000);
@@ -195,6 +265,28 @@ async function openEvent(id, moveFocus = false) {
     if (state.detailController !== controller) return;
     const root = $('detail-content'), e = ins.event;
     root.append(node('p', `${e.subject || e.type} · ${e.source} · event time ${stamp(e.timestamp)}`));
+    root.append(node('h3', 'Recorded result'));
+    if (ins.executions?.length) {
+      for (const x of ins.executions) root.append(node('p', executionSummary(x)));
+    } else {
+      root.append(node('p', 'No execution recorded. The event may still be processing or its result may be unavailable.'));
+    }
+    const parent = e.provenance?.parent_event_id;
+    if (parent || ins.child_event_ids?.length) {
+      root.append(node('h3', 'Related events'));
+      const links = node('ul');
+      for (const [label, related] of [['Parent', parent], ...(ins.child_event_ids || []).map(child => ['Child', child])]) {
+        if (!related) continue;
+        const item = node('li'), link = node('a', `${label}: ${related}`);
+        link.href = locationFor(related);
+        link.addEventListener('click', event => {
+          if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+          event.preventDefault(); state.selected = related; navigate(); openEvent(related, true);
+        });
+        item.append(link); links.append(item);
+      }
+      root.append(links);
+    }
     root.append(node('h3', 'Original message / event (redacted)'), node('pre', typeof e.data?.message === 'string' ? e.data.message : ins.event_json));
     // The server formats this before JSON numbers enter JavaScript's float64.
     const fullEvent = node('details');
@@ -208,6 +300,7 @@ async function openEvent(id, moveFocus = false) {
     if (!ins.decisions?.length) root.append(node('p', 'No decision recorded. The event may be filtered, in flight, or incomplete.'));
     for (const x of ins.executions || []) {
       root.append(node('p', `${x.policy_rule || 'No policy reference'} → ${x.outcome} · ${x.status}${x.adapter ? ` · ${x.adapter}` : ''}`));
+      if (x.policy_hash) root.append(node('p', `Recorded policy revision: ${x.policy_hash}. Its historical definition may not be available.`, 'help'));
       if (x.status === 'shadow') root.append(node('p', 'Recorded only. No adapter effect was performed.'));
       if (x.status === 'pending') root.append(node('p', 'Unfinished intent. This does not prove whether an effect happened.', 'warning'));
       if (x.error) root.append(node('pre', x.error));
@@ -226,17 +319,26 @@ async function openEvent(id, moveFocus = false) {
     if (state.detailController === controller) $('detail-status').textContent = `${error.name === 'AbortError' ? 'Request timed out.' : error.message} Use Refresh this event to retry.`;
   } finally { clearTimeout(timeout); }
 }
-$('refresh').addEventListener('click', refresh);
+$('refresh').addEventListener('click', () => { state.before = ''; state.offset = 0; navigate(); refresh(); });
 $('search-form').addEventListener('submit', e => { e.preventDefault(); search(); });
 $('view').addEventListener('change', search);
-$('previous').addEventListener('click', () => { state.offset = Math.max(0, state.offset - 50); refresh(); });
-$('next').addEventListener('click', () => { state.offset += 50; refresh(); });
+$('previous').addEventListener('click', () => { state.offset = Math.max(0, state.offset - 50); closeDetail(false); navigate(); refresh(); });
+$('next').addEventListener('click', () => { state.offset = Math.min(100000, state.offset + 50); closeDetail(false); navigate(); refresh(); });
 $('refresh-detail').addEventListener('click', () => { if (state.selected) openEvent(state.selected); });
-$('close-detail').addEventListener('click', () => {
+function closeDetail(moveFocus) {
   state.detailController?.abort(); state.detailController = null; $('detail').hidden = true;
-  const button = [...$('events-body').querySelectorAll('button')].find(el => el.dataset.eventId === state.selected);
-  (button || $('query')).focus(); state.selected = null;
-  if (button) { button.setAttribute('aria-pressed', 'false'); button.closest('tr').classList.remove('selected'); }
+  const button = [...$('events-body').querySelectorAll('.event-open')].find(el => el.dataset.eventId === state.selected);
+  if (moveFocus) (button || $('query')).focus();
+  state.selected = null;
+  if (button) { button.removeAttribute('aria-current'); button.closest('tr').classList.remove('selected'); }
+}
+$('close-detail').addEventListener('click', () => { closeDetail(true); navigate(); });
+// Back and Forward restore the same filter, page, and event without a reload.
+window.addEventListener('popstate', () => {
+  closeDetail(false);
+  const id = readLocation();
+  if (id) openEvent(id);
+  refresh();
 });
 // The page owns polling. Hidden pages stop scheduling; returning always gets
 // fresh evidence rather than leaving a green status from the previous visit.
@@ -251,4 +353,6 @@ document.addEventListener('visibilitychange', () => {
 });
 window.addEventListener('pagehide', () => { clearTimeout(state.timer); state.controller?.abort(); state.detailController?.abort(); });
 window.addEventListener('pageshow', e => { if (e.persisted) refresh(); });
+const initialEvent = readLocation();
+if (initialEvent) openEvent(initialEvent);
 refresh();

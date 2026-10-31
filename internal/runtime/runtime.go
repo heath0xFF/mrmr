@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/heath0xff/mrmr/internal/agent"
+	"github.com/heath0xff/mrmr/internal/config"
 	"github.com/heath0xff/mrmr/internal/event"
 	"github.com/heath0xff/mrmr/internal/filter"
 	"github.com/heath0xff/mrmr/internal/model"
@@ -34,17 +35,22 @@ import (
 // construction: the config that built it is the config it runs, which lets
 // in-flight events finish under the rules they started with.
 type Runtime struct {
-	DB        *storage.DB
-	Client    *model.Client
-	ModelCfg  model.Config
-	ModelKey  string // name in config, recorded on decisions
-	Prompt    string
-	Schema    model.Schema
-	Questions model.Questions
-	Policy    policy.Policy
-	Filters   filter.List
+	// Managed instances share a durable safety switch across revisions. It is
+	// checked after interpretation, immediately before adapter dispatch.
+	EffectsBlocked func() bool
+	ConfigRevision string
+	DB             *storage.DB
+	Client         *model.Client
+	ModelCfg       model.Config
+	ModelKey       string // name in config, recorded on decisions
+	Prompt         string
+	Schema         model.Schema
+	Questions      model.Questions
+	Policy         policy.Policy
+	Filters        filter.List
 	// Exact type overrides allow a completion to ask a different bounded
 	// question without introducing independently routed workflows.
+	Monitors        map[string]config.Monitor
 	InterpretByType map[string]model.Interpretation
 	Models          map[string]model.Config
 	Agents          map[string]agent.Config
@@ -125,6 +131,11 @@ func (r *Runtime) ingest(ctx context.Context, e event.Event, t *[]TraceStep) (*R
 		step(t, "duplicate", "dropped: (source, dedup_key) already seen")
 		return &Response{EventID: e.ID, Duplicate: true, Trace: *t}, nil
 	}
+	if r.ConfigRevision != "" {
+		if _, err := r.DB.ExecContext(ctx, `INSERT INTO event_config_revisions(event_id,revision) VALUES(?,?)`, e.ID, r.ConfigRevision); err != nil {
+			return nil, fmt.Errorf("record configuration revision: %w", err)
+		}
+	}
 	step(t, "persist", "event stored")
 
 	// Recursion guard for mrmr-emitted events. The event is durable and
@@ -157,8 +168,13 @@ func (r *Runtime) ingest(ctx context.Context, e event.Event, t *[]TraceStep) (*R
 	}
 
 	spec := model.Interpretation{Model: r.ModelKey, Prompt: r.Prompt, Schema: r.Schema, Questions: r.Questions}
-	mc := r.ModelCfg
-	if override, ok := r.InterpretByType[e.Type]; ok {
+	mc, selectedPolicy := r.ModelCfg, r.Policy
+	// Source identity is runtime data, never a model-selected route. A local
+	// default is terminal: it must not fall through to the shared policy.
+	if monitor, ok := r.Monitors[e.Source]; ok {
+		spec, mc, selectedPolicy = monitor.Interpret, r.Models[monitor.Interpret.Model], monitor.Policy
+		step(t, "monitor", "source-local contract: "+e.Source)
+	} else if override, ok := r.InterpretByType[e.Type]; ok {
 		spec, mc = override, r.Models[override.Model]
 	}
 	dec := &event.Decision{ID: event.NewID("dec_"), EventID: e.ID, Interpreter: spec.Model, Model: mc.Model}
@@ -201,7 +217,7 @@ func (r *Runtime) ingest(ctx context.Context, e event.Event, t *[]TraceStep) (*R
 	var then policy.Then
 	ruleIdx := -1
 	if dec.Status == "ok" {
-		then, ruleIdx = r.Policy.EvaluateEvent(dec.Result, e) // assignment, not := — the outer then must be set here
+		then, ruleIdx = selectedPolicy.EvaluateEvent(dec.Result, e) // assignment, not := — the outer then must be set here
 		if ruleIdx < 0 {
 			step(t, "policy", "default → "+then.Outcome())
 		} else {
@@ -224,14 +240,18 @@ func (r *Runtime) ingest(ctx context.Context, e event.Event, t *[]TraceStep) (*R
 		rule = "decision-failed"
 	}
 	x := storage.Execution{ID: event.NewID("exe_"), EventID: e.ID, DecisionID: dec.ID,
-		Outcome: then.Outcome(), Adapter: adapterFor(then), Status: "pending", PolicyRule: rule, PolicyHash: r.Policy.Version()}
+		Outcome: then.Outcome(), Adapter: adapterFor(then), Status: "pending", PolicyRule: rule, PolicyHash: selectedPolicy.Version()}
 	// Without durable intent there can be no effect or child event. A pending
 	// row after a crash remains inspectable; it is never automatically retried.
 	intentErr := r.DB.BeginExecution(x)
 	if intentErr != nil {
 		execErr = "execution intent could not be persisted; effect suppressed"
 		log.Printf("mrmr: persist execution for %s: %v", e.ID, intentErr)
-	} else if then.Shadow {
+	} else if then.Shadow || (r.EffectsBlocked != nil && r.EffectsBlocked() && then.Outcome() != "ignore") {
+		if !then.Shadow {
+			step(t, "safety", "operator return-to-shadow suppressed adapter dispatch")
+		}
+		then.Shadow = true
 		step(t, "outcome", "shadow: "+then.Outcome()+" recorded but not executed")
 	} else {
 		origin := e.ID

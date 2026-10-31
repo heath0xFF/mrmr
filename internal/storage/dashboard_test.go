@@ -49,6 +49,9 @@ func TestDashboardSummaryAndViews(t *testing.T) {
 	if err := db.InsertDecision(event.Decision{ID: "dec_other", EventID: id, Interpreter: "other", Model: "other", Status: "errored", Error: "connection refused", LatencyMs: 1}); err != nil {
 		t.Fatal(err)
 	}
+	if err := db.InsertExecution("exe_pending", id, "dec_other", "notify", "discord", "pending", ""); err != nil {
+		t.Fatal(err)
+	}
 	s, err := db.DashboardSummary(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -65,7 +68,7 @@ func TestDashboardSummaryAndViews(t *testing.T) {
 			t.Fatalf("no success: %+v", m)
 		}
 	}
-	for view, want := range map[string]int{"all": 5, "unlabeled": 4, "shadow": 4, "ignore": 0, "errors": 3} {
+	for view, want := range map[string]int{"all": 5, "unlabeled": 4, "shadow": 4, "ignore": 0, "pending": 1, "errors": 3} {
 		p, err := db.DashboardEvents(ctx, "", view, 0)
 		if err != nil || len(p.Events) != want {
 			t.Fatalf("view %s: %+v, %v", view, p, err)
@@ -113,6 +116,49 @@ func TestDashboardPaginationEmptyAndCancellation(t *testing.T) {
 	}
 	if _, err = db.InspectContext(ctx, "evt_0000"); !errors.Is(err, context.Canceled) {
 		t.Fatalf("detail cancellation: %v", err)
+	}
+}
+
+func TestDashboardGrowingHistory(t *testing.T) {
+	db := openTestDB(t)
+	// Populate enough history to exercise the bounded projection rather than
+	// relying only on a near-empty database. No real event payload is needed.
+	_, err := db.Exec(`WITH RECURSIVE fixture(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM fixture WHERE n<10000)
+	 INSERT INTO events(id,type,source,event_time,ingest_time,data,metadata,dedup_key)
+	 SELECT printf('fixture_%06d',n),'test.warning','fixture','2010-01-01T00:00:00Z',
+	 printf('2010-01-01T%02d:%02d:%02d.000000000Z',n/3600,(n/60)%60,n%60),'{"message":"fixture warning"}','{}',printf('%d',n) FROM fixture`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	page, err := db.DashboardEvents(ctx, "fixture warning", "all", 9950)
+	if err != nil || len(page.Events) != 50 || page.More {
+		t.Fatalf("large page: %+v %v", page, err)
+	}
+	summary, err := db.DashboardSummary(ctx)
+	if err != nil || summary.Events != 10000 || len(summary.Repeats) != 1 || summary.Repeats[0].Count != DashboardWindow {
+		t.Fatalf("bounded history: %+v %v", summary, err)
+	}
+}
+
+func TestDashboardSnapshotDoesNotShiftWithNewEvents(t *testing.T) {
+	db := openTestDB(t)
+	for i := 0; i < 52; i++ {
+		dashboardEvent(t, db, i)
+	}
+	ctx := context.Background()
+	page, err := db.DashboardEventsAt(ctx, "", "all", 0, "2026-01-01T00:00:00.000000001Z")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := dashboardEvent(t, db, 100)
+	if _, err := db.Exec(`UPDATE events SET ingest_time='2026-01-01T00:00:00.000000002Z' WHERE id=?`, id); err != nil {
+		t.Fatal(err)
+	}
+	page, err = db.DashboardEventsAt(ctx, "", "all", 50, page.Before)
+	if err != nil || len(page.Events) != 2 || page.Events[0].ID != "evt_0001" {
+		t.Fatalf("snapshot shifted: %+v %v", page, err)
 	}
 }
 

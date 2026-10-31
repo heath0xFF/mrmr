@@ -68,16 +68,36 @@ func NewHTTPPoller(cfg config.Source) (*HTTPPoller, error) {
 // Run polls until ctx is canceled. The first poll is immediate so a fresh
 // config produces data without waiting one interval.
 func (p *HTTPPoller) Run(ctx context.Context, rt *runtime.Runtime) {
+	p.RunUntil(ctx, nil, rt)
+}
+
+// RunUntil drains the current poll before a configuration change. Shutdown
+// still cancels I/O through ctx; a revision switch closes stop instead.
+func (p *HTTPPoller) RunUntil(ctx context.Context, stop <-chan struct{}, rt *runtime.Runtime) {
 	ticker := time.NewTicker(p.cfg.Every)
 	defer ticker.Stop()
-
-	p.poll(ctx, rt)
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
+		case <-stop:
+			return
+		default:
+		}
+		// A managed revision must be able to drain even a very large feed.
+		if stop == nil {
 			p.poll(ctx, rt)
+		} else {
+			pollCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+			p.poll(pollCtx, rt)
+			cancel()
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-stop:
+			return
+		case <-ticker.C:
 		}
 	}
 }

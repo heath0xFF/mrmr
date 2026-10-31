@@ -12,7 +12,7 @@
   <a class="skip" href="#activity">Skip to events</a>
   <header class="masthead">
     <div class="identity"><a class="brand" href="/dashboard/">mrmr</a><span id="host-name" class="host-name">Connecting to runtime</span></div>
-    <nav aria-label="Dashboard sections"><a href="#activity">Activity</a><a href="#latency">Latency</a><a href="#sources-title">Sources</a></nav>
+    <nav aria-label="Dashboard sections"><a href="#activity">Activity</a><a href="#latency">Latency</a><a href="#sources-title">Sources</a><a href="#configuration-title">Configuration</a></nav>
     <span class="readonly">Read-only</span>
   </header>
   <main>
@@ -38,9 +38,10 @@
           <div class="section-heading"><h2 id="activity-title">Events</h2><span>Newest received first</span></div>
           <form id="search-form" class="search-controls" role="search">
             <div class="search-field"><label for="query">Search events</label><input id="query" name="q" type="search" maxlength="200" placeholder="Message, service, source, or ID"></div>
-            <div class="view-field"><label for="view">Show</label><select id="view" name="view"><option value="all">All events</option><option value="unlabeled">Unlabeled</option><option value="shadow">Shadow outcomes</option><option value="ignore">Ignored</option><option value="errors">Errors / invalid</option></select></div>
+            <div class="view-field"><label for="view">Show</label><select id="view" name="view"><option value="all">All events</option><option value="unlabeled">Unlabeled</option><option value="shadow">Shadow outcomes</option><option value="ignore">Ignored</option><option value="pending">Unfinished intents</option><option value="errors">Errors / invalid</option></select></div>
             <button class="primary-button" type="submit">Search</button>
           </form>
+          <p class="help">Outcome filters use each event’s latest recorded execution. Unfinished intent does not prove whether an effect occurred.</p>
           <p id="event-status" class="help" role="status">Loading events…</p>
           <section id="detail" class="detail" aria-labelledby="detail-title" tabindex="-1" hidden>
             <div class="section-heading"><h3 id="detail-title">Event detail</h3><button id="close-detail" type="button">Close detail</button></div>
@@ -55,6 +56,7 @@
       </div>
       <aside aria-label="Runtime and collection scope">
         <section aria-labelledby="sources-title"><h2 id="sources-title">Watching</h2><div id="sources"><p>No source data yet.</p></div><p class="help">A completed source poll does not mean every model call succeeded.</p></section>
+        <section aria-labelledby="configuration-title"><h2 id="configuration-title">Current pipeline</h2><p class="help">Startup configuration, not an editor. Changes require a validated configuration and restart.</p><div id="configuration">Waiting for configuration.</div></section>
         <section aria-labelledby="policy-title"><h2 id="policy-title">Effect boundaries</h2><p id="policy-summary">Checking active policy…</p><div id="policy"></div><p id="filters" class="help"></p></section>
         <section aria-labelledby="repeats-title"><h2 id="repeats-title">Repeated messages</h2><p class="help">Exact matches in the latest 1,000 events. Repetition does not mean harmless.</p><div id="repeats"></div></section>
         <section aria-labelledby="runtime-title"><h2 id="runtime-title">Runtime</h2><p id="runtime-evidence">No live evidence yet.</p><p class="help">A successful refresh proves the runtime answered. An old model success does not prove it is reachable now.</p></section>

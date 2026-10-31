@@ -106,6 +106,9 @@ func (d *DB) InspectContext(ctx context.Context, eventID string) (*Inspection, e
 		return nil, err
 	}
 	ins := &Inspection{Event: e}
+	if err := d.QueryRowContext(ctx, `SELECT revision FROM event_config_revisions WHERE event_id=?`, eventID).Scan(&ins.ConfigRevision); err != nil && err != sql.ErrNoRows {
+		return nil, fmt.Errorf("read event configuration revision: %w", err)
+	}
 
 	if ins.Decisions, err = d.eventDecisions(ctx, eventID); err != nil {
 		return nil, err

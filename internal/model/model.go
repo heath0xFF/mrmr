@@ -92,7 +92,9 @@ func (c *Client) interpretOpenAI(ctx context.Context, cfg Config, interpreter st
 		Temperature:    0,
 		ResponseFormat: &responseFormat{Type: "json_schema", JSONSchema: &jsonSchemaFmt{Name: "decision", Strict: true, Schema: schemaMap(schema)}},
 	}
-	hc := &http.Client{Timeout: requestTimeout}
+	// A configured model destination cannot delegate its credential or payload
+	// to another URL, including during an operator-authorized setup test.
+	hc := &http.Client{Timeout: requestTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 
 	var (
 		transportErr  error
@@ -220,7 +222,7 @@ func (c *Client) post(ctx context.Context, hc *http.Client, cfg Config, req chat
 		return "", &statusError{Code: resp.StatusCode}
 	}
 	var cr chatResponse
-	if err := json.NewDecoder(resp.Body).Decode(&cr); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&cr); err != nil {
 		return "", fmt.Errorf("decode response: %w", err)
 	}
 	if len(cr.Choices) == 0 {

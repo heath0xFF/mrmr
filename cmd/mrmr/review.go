@@ -74,7 +74,7 @@ func label(args []string) error {
 		return err
 	}
 	selected := *cfg
-	selected.Interpret = cfg.InterpreterFor(ins.Event.Type)
+	selected.Interpret = cfg.InterpreterForEvent(ins.Event)
 	if err := validateLabelCategory(&selected, *category); err != nil {
 		return err
 	}

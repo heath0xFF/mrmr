@@ -53,7 +53,7 @@ func TestDashboardLocalReadOnlyAndRedaction(t *testing.T) {
 	h, rt := testDashboard(t)
 	rt.StartPoll("journal")
 	rt.FinishPoll("journal", nil)
-	for _, path := range []string{"/dashboard/", "/dashboard/dashboard.js", "/dashboard/dashboard.css", "/dashboard/api/overview", "/dashboard/api/events", "/dashboard/api/event?id=evt_test"} {
+	for _, path := range []string{"/dashboard/", "/dashboard/dashboard.js", "/dashboard/dashboard.css", "/dashboard/api/overview", "/dashboard/api/events", "/dashboard/api/events?view=pending", "/dashboard/api/event?id=evt_test"} {
 		w := request(h, "GET", path)
 		if w.Code != 200 {
 			t.Fatalf("%s: %d %s", path, w.Code, w.Body.String())
@@ -87,6 +87,53 @@ func TestDashboardLocalReadOnlyAndRedaction(t *testing.T) {
 	w = request(h, "HEAD", "/dashboard/api/overview")
 	if w.Code != 200 || w.Body.Len() != 0 {
 		t.Fatal("HEAD should not return data")
+	}
+}
+
+func TestDashboardPipelineProjection(t *testing.T) {
+	_, rt := testDashboard(t)
+	cfg := &config.Config{
+		Models: map[string]model.Config{
+			"judge":  {Role: "decision", Provider: "openai-compatible", Model: "local", BaseURL: "https://private.invalid/model", APIKeyEnv: "DASHBOARD_TEST_KEY"},
+			"worker": {Role: "agent", Provider: "openai-compatible", Model: "worker"},
+		},
+		Interpret:       config.Interpret{Model: "judge"},
+		InterpretByType: map[string]config.Interpret{"agent.completed": {Model: "judge"}},
+	}
+	w := request(New(rt, cfg), "GET", "/dashboard/api/overview")
+	if w.Code != http.StatusOK {
+		t.Fatalf("overview: %d %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	for _, want := range []string{`"interpreter":"judge"`, `"agent.completed":"judge"`, `"role":"agent"`, `"model":"local"`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("missing %s: %s", want, body)
+		}
+	}
+	for _, secret := range []string{"private.invalid", "DASHBOARD_TEST_KEY", "synthetic-private-key"} {
+		if strings.Contains(body, secret) {
+			t.Fatalf("pipeline projection leaked %q", secret)
+		}
+	}
+}
+
+func TestDashboardEventLineage(t *testing.T) {
+	h, rt := testDashboard(t)
+	child := event.Event{
+		ID: "evt_child", Type: "agent.completed", Source: "agent", Timestamp: time.Now().UTC(),
+		Provenance: &event.Provenance{ParentEventID: "evt_test", OriginEventID: "evt_test"},
+	}
+	if _, err := rt.DB.InsertEvent(child); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ id, want string }{
+		{"evt_test", `"child_event_ids":["evt_child"]`},
+		{"evt_child", `"parent_event_id":"evt_test"`},
+	} {
+		w := request(h, "GET", "/dashboard/api/event?id="+tc.id)
+		if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), tc.want) {
+			t.Fatalf("event %s: %d %s", tc.id, w.Code, w.Body.String())
+		}
 	}
 }
 

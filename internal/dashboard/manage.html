@@ -1,0 +1,703 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>mrmr · Manage</title>
+    <link rel="stylesheet" href="manage.css" />
+    <script src="manage.js" defer></script>
+    <script src="manage-setup.js" defer></script>
+    <script src="manage-monitors.js" defer></script>
+  </head>
+  <body>
+    <a class="skip" href="#main">Skip to content</a>
+    <header>
+      <a href="#overview" class="brand">mrmr</a
+      ><span id="host">Management</span>
+      <nav aria-label="Main navigation">
+        <a href="#overview">Overview</a><a href="#activity">Activity</a
+        ><a href="#review">Review</a><a href="#configure">Configure</a
+        ><a href="#runtime">Runtime</a>
+      </nav>
+      <button id="logout" hidden>Lock</button>
+    </header>
+    <main id="main">
+      <div id="notice" role="status" aria-live="polite">
+        Connect to the private management listener.
+      </div>
+      <section id="login">
+        <h1>Open your runtime</h1>
+        <p>
+          This page can change mrmr. Use the operator token set in its
+          environment. Your token stays in this page’s memory and is cleared
+          when you lock or reload.
+        </p>
+        <form id="login-form">
+          <label for="token">Operator token</label
+          ><input
+            id="token"
+            type="password"
+            autocomplete="off"
+            required
+            minlength="32"
+          /><button class="primary">Unlock management</button>
+        </form>
+        <p class="help">
+          Use an SSH tunnel or private HTTPS proxy. Never expose this listener
+          publicly.
+        </p>
+      </section>
+      <div id="app" hidden>
+        <section data-page="overview">
+          <div class="heading">
+            <div>
+              <h1>Overview</h1>
+              <p>Collection, interpretation, and the boundaries on effects.</p>
+            </div>
+            <button id="refresh-overview">Refresh status</button>
+          </div>
+          <p id="freshness" class="help"></p>
+          <div id="overview-content"></div>
+          <h2>Sources</h2>
+          <div id="source-health"></div>
+          <h2>Model evidence</h2>
+          <p class="help">
+            Recorded request latency is not a live endpoint health check.
+          </p>
+          <div id="model-health"></div>
+        </section>
+        <section data-page="activity" hidden>
+          <h1>Activity</h1>
+          <p>
+            Follow the stored evidence. This list does not reorder while you
+            read it.
+          </p>
+          <form id="search">
+            <label for="query">Search events</label>
+            <div class="row">
+              <input
+                id="query"
+                type="search"
+                maxlength="200"
+                placeholder="Message, source, service, or ID"
+              /><select id="view" aria-label="Event filter">
+                <option value="all">All events</option>
+                <option value="errors">Errors / invalid</option>
+                <option value="pending">Unfinished intents</option>
+                <option value="unlabeled">Unlabeled</option>
+                <option value="shadow">Shadow outcomes</option>
+                <option value="ignore">Ignored</option></select
+              ><button>Search</button>
+            </div>
+          </form>
+          <div id="events"></div>
+          <div class="row pager">
+            <button id="previous">Previous</button><span id="page-info"></span
+            ><button id="next">Next</button>
+          </div>
+          <section id="event-detail" tabindex="-1" hidden></section>
+        </section>
+        <section data-page="review" hidden>
+          <h1>Review</h1>
+          <p>
+            Record your expected result, not agreement with the model. Saving a
+            review does not rerun an event or send an effect.
+          </p>
+          <div class="row">
+            <label for="review-id">Event ID</label
+            ><input id="review-id" /><button id="load-review">Load event</button
+            ><a href="#activity">Find events in Activity</a>
+          </div>
+          <div id="review-evidence"></div>
+          <form id="review-form" hidden>
+            <div class="fields">
+              <label
+                >Review state<select id="review-state">
+                  <option value="reviewed">Reviewed</option>
+                  <option value="uncertain">Uncertain</option>
+                  <option value="deferred">Deferred</option>
+                </select></label
+              ><label
+                >Origin<select id="review-origin">
+                  <option value="unknown">Unknown</option>
+                  <option value="real">Real event</option>
+                  <option value="synthetic">Synthetic / test</option>
+                </select></label
+              ><label
+                >Expected category<input id="category" maxlength="200" /></label
+              ><label
+                >Action required<select id="requires-action">
+                  <option value="">Choose an answer</option>
+                  <option value="true">Yes</option>
+                  <option value="false">No</option>
+                </select></label
+              ><label
+                >Expected outcome<select id="expected-outcome">
+                  <option value="">Choose an outcome</option>
+                  <option>ignore</option>
+                  <option>notify</option>
+                  <option>act</option>
+                  <option>delegate</option>
+                </select></label
+              >
+            </div>
+            <button class="primary">Save review</button>
+            <details>
+              <summary>Recorded model answer and recent label history</summary>
+              <pre id="review-history"></pre>
+            </details>
+          </form>
+          <h2>Evaluate a candidate</h2>
+          <p>
+            Uses up to 50 most recent events explicitly reviewed as real. The
+            report saves the selected IDs and label snapshots. Uncertain,
+            deferred, synthetic, and unknown-origin events are excluded.
+          </p>
+          <p>
+            Policy comparison uses stored Decisions without inference.
+            Interpreter evaluation can make bounded model calls to active
+            configured endpoints. Neither executes adapters or tests ingestion
+            filters, deduplication, or the depth guard.
+          </p>
+          <label for="eval-mode">Evaluation mode</label
+          ><select id="eval-mode">
+            <option value="policy">Policy comparison · no model calls</option>
+            <option value="interpreter">
+              Interpreter + policy · up to 50 events, bounded retries
+            </option></select
+          ><label class="check"
+            ><input id="eval-confirm" type="checkbox" />I reviewed the candidate
+            in Configure and authorize this evaluation, including sending event
+            data to its configured model endpoints when selected.</label
+          >
+          <div class="row">
+            <button id="evaluate">Evaluate editor candidate</button
+            ><button id="cancel-eval">Cancel current evaluation</button
+            ><button id="refresh-evals">Refresh reports</button>
+          </div>
+          <div id="evaluations"></div>
+        </section>
+        <section data-page="configure" hidden>
+          <div class="heading">
+            <div>
+              <h1 id="config-title">Current configuration</h1>
+              <p id="config-description">
+                The monitoring services in the active revision. Draft changes
+                are not running.
+              </p>
+            </div>
+            <div class="row">
+              <button id="back-current" hidden>
+                Back to current configuration
+              </button>
+              <button id="reload-config">Reload saved state</button>
+            </div>
+          </div>
+          <p id="config-state" class="help"></p>
+          <p id="setup-note" class="warning" hidden>
+            First-run setup: collection and effects are disabled until a valid
+            configuration is activated. Set a real model endpoint before
+            activation.
+          </p>
+          <div id="current-config">
+            <div class="row">
+              <button id="add-monitor" class="primary">
+                Add monitoring service
+              </button>
+              <button id="open-advanced" type="button">
+                Advanced configuration
+              </button>
+            </div>
+            <div
+              id="active-monitors"
+              aria-label="Active monitoring configuration"
+            ></div>
+            <p class="help">
+              Enabled means collection is configured, not that the service is
+              healthy. Check <a href="#overview">Overview</a> for poll health.
+            </p>
+          </div>
+          <div id="setup-guide" hidden>
+            <p id="setup-intro">
+              Each monitor has its own model selection and notification rules.
+              Connections can be reused. The guide edits one monitor; activation
+              applies the whole draft.
+            </p>
+            <ol class="setup-steps" aria-label="Setup progress">
+              <li data-setup-marker="0" aria-current="step">1. Service</li>
+              <li data-setup-marker="1">2. Model</li>
+              <li data-setup-marker="2">3. Notifications</li>
+              <li data-setup-marker="3">4. Test and start</li>
+            </ol>
+            <form id="setup-form" novalidate>
+              <fieldset data-setup-step="0">
+                <legend>Which service should mrmr watch?</legend>
+                <p>
+                  Choose exact Linux system units. User services, including
+                  user-run Hermes services, are not supported yet.
+                </p>
+                <div class="fields">
+                  <label
+                    >Monitor name<input
+                      id="setup-name"
+                      required
+                      placeholder="Plex"
+                  /></label>
+                  <label
+                    >System units, separated by commas<input
+                      id="setup-units"
+                      required
+                      placeholder="plexmediaserver.service"
+                  /></label>
+                  <label
+                    >Severity and higher
+                    <select id="setup-priority">
+                      <option value="warning">Warning</option>
+                      <option value="err">Error</option>
+                      <option value="crit">Critical</option>
+                      <option value="emerg">Emergency</option>
+                      <option value="alert">Alert</option>
+                      <option value="notice">Notice</option>
+                      <option value="info">Info</option>
+                      <option value="debug">Debug</option>
+                    </select>
+                  </label>
+                  <label
+                    >Poll interval<input id="setup-every" required value="30s"
+                  /></label>
+                </div>
+                <p id="setup-cursor" class="help"></p>
+                <button id="setup-next-source" type="button" class="primary">
+                  Continue to model
+                </button>
+              </fieldset>
+              <fieldset data-setup-step="1" hidden>
+                <legend>Which model will judge these events?</legend>
+                <label
+                  >Model connection<select id="setup-connection"></select
+                ></label>
+                <p id="setup-connection-info" class="help"></p>
+                <div id="setup-new-connection">
+                  <p>
+                    Connect another decision model. This will not edit a
+                    connection used by another monitor.
+                  </p>
+                  <div class="fields">
+                    <label
+                      >Connection name<input
+                        id="setup-connection-name"
+                        required
+                        placeholder="d1"
+                    /></label>
+                    <label
+                      >Provider
+                      <select id="setup-provider" required>
+                        <option value="liquid-d1">Liquid d1</option>
+                        <option value="openai-compatible">
+                          OpenAI-compatible
+                        </option>
+                        <option value="typesafe">TypeSafe</option>
+                        <option value="system-one">
+                          Other System One endpoint
+                        </option>
+                      </select>
+                    </label>
+                    <label
+                      >Model identity<input
+                        id="setup-model"
+                        required
+                        autocomplete="off"
+                        placeholder="Exact identity served by your model"
+                    /></label>
+                    <label
+                      >API base URL<input
+                        id="setup-url"
+                        type="url"
+                        required
+                        placeholder="http://model-host:8091/v1"
+                        aria-describedby="setup-destination-help"
+                    /></label>
+                    <label
+                      >Credential environment variable
+                      <span id="setup-credential-optional">(optional)</span>
+                      <input
+                        id="setup-env"
+                        pattern="[A-Za-z_][A-Za-z0-9_]*"
+                        placeholder="MRMR_D1_API_KEY"
+                        autocomplete="off"
+                        aria-describedby="setup-credential-help"
+                      />
+                    </label>
+                  </div>
+                  <p id="setup-destination-help" class="help">
+                    The runtime must reach this address. “localhost” means the
+                    runtime host, not your browser or a separate model server.
+                  </p>
+                  <p id="setup-credential-help" class="help">
+                    Enter a variable name, never the key itself. Provision the
+                    key in the runtime service environment and restart mrmr. The
+                    browser cannot install credentials.
+                  </p>
+                </div>
+                <div class="row">
+                  <button id="setup-back-source" type="button">Back</button>
+                  <button id="setup-next-model" type="button" class="primary">
+                    Continue to notifications
+                  </button>
+                </div>
+              </fieldset>
+              <fieldset data-setup-step="2" hidden>
+                <legend>Where should incident alerts go?</legend>
+                <p>
+                  Only incidents that need operator action qualify. New and
+                  edited monitors start in shadow: the intended notification is
+                  recorded, not sent.
+                </p>
+                <label
+                  >Notification destination
+                  <select id="setup-notify">
+                    <option value="discord">Discord channel</option>
+                    <option value="stdout">Runtime log (stdout)</option>
+                  </select>
+                </label>
+                <div id="setup-discord">
+                  <label
+                    >Discord connection<select id="setup-webhook"></select
+                  ></label>
+                  <label id="setup-webhook-new"
+                    >Credential environment variable
+                    <input
+                      id="setup-webhook-env"
+                      required
+                      pattern="[A-Za-z_][A-Za-z0-9_]*"
+                      placeholder="MRMR_DISCORD_WEBHOOK_URL"
+                      autocomplete="off"
+                    />
+                  </label>
+                  <p id="setup-discord-status" class="help"></p>
+                  <p class="help">
+                    Each webhook sends to one Discord channel. Choose a stored
+                    reference, never paste a webhook URL here. Alerts contain
+                    the service, source, and Event ID—not private journal text.
+                    Delivery is not tested by the model check.
+                  </p>
+                </div>
+                <div id="setup-thresholds" class="fields">
+                  <label
+                    >Minimum incident confidence<input
+                      id="setup-confidence"
+                      type="number"
+                      min="0"
+                      max="1"
+                      step="0.01"
+                      required
+                      value="0.85"
+                  /></label>
+                  <label
+                    >Minimum action probability<input
+                      id="setup-action-probability"
+                      type="number"
+                      min="0"
+                      max="1"
+                      step="0.01"
+                      required
+                      value="0.85"
+                  /></label>
+                </div>
+                <p id="setup-rule-help" class="help"></p>
+                <div class="row">
+                  <button id="setup-back-model" type="button">Back</button>
+                  <button id="setup-next-notify" type="button" class="primary">
+                    Review and test
+                  </button>
+                </div>
+              </fieldset>
+              <fieldset data-setup-step="3" hidden>
+                <legend>Review this monitor before you start</legend>
+                <div class="setup-review">
+                  <div>
+                    <dl id="setup-summary" class="setup-summary"></dl>
+                    <p class="help">
+                      Applies standard service questions and the rule shown
+                      above to this monitor only. Its custom questions and
+                      rules, if any, are replaced. Other settings are retained
+                      from the starting document. Any earlier draft changes also
+                      activate; review them in Advanced before continuing.
+                    </p>
+                  </div>
+                  <div class="setup-test">
+                    <h2>Model connection test</h2>
+                    <p>
+                      Send two synthetic messages to this model: up to six
+                      requests in 30 seconds. No private logs, source reads, or
+                      effects. Inference may incur cost.
+                    </p>
+                    <button id="setup-test" type="button">
+                      Test model with synthetic examples
+                    </button>
+                    <div id="setup-test-result" role="status"></div>
+                  </div>
+                </div>
+                <label class="check"
+                  ><input id="setup-confirm" type="checkbox" />I reviewed this
+                  monitor’s model, collection scope, and replacement rules. I
+                  also reviewed any earlier draft changes. Apply the draft in
+                  shadow.</label
+                >
+                <div class="row">
+                  <button id="setup-back-notify" type="button">Back</button>
+                  <button
+                    id="setup-start"
+                    type="button"
+                    class="primary"
+                    disabled
+                  >
+                    Start in shadow
+                  </button>
+                </div>
+                <p class="help">
+                  Saves and activates the draft after checking journal access. A
+                  successful synthetic test does not prove real-event quality or
+                  Discord delivery.
+                </p>
+              </fieldset>
+            </form>
+            <p id="setup-status" role="status"></p>
+            <button id="setup-open-advanced" type="button">
+              Continue in Advanced configuration
+            </button>
+          </div>
+          <div id="advanced-config" hidden>
+            <div class="heading">
+              <h2>Advanced configuration</h2>
+              <button id="open-guided" type="button">
+                Add a monitor to this draft
+              </button>
+            </div>
+            <p>
+              Forms below edit shared defaults and sources. Per-monitor
+              contracts are preserved in YAML under <code>monitors</code>.
+              Validation checks the structure, not model connectivity. Nothing
+              changes until activation.
+            </p>
+            <button id="load-active">Load active into editor</button>
+            <details>
+              <summary>Model, source, and policy forms</summary>
+              <p>
+                These forms update the editor, not the running configuration.
+                Edit interpretation contracts and advanced mappings in YAML
+                below. Policy rules use first-match order. Forms replace YAML
+                formatting and comments. Validate after manual YAML edits to
+                refresh the lists.
+              </p>
+              <form id="model-form">
+                <h2>Model endpoint</h2>
+                <div class="fields">
+                  <label>Name<input id="model-name" required /></label
+                  ><label
+                    >Role<select id="model-role">
+                      <option value="decision">Decision</option>
+                      <option value="agent">Agent hint</option>
+                    </select></label
+                  ><label
+                    >Provider<select id="model-provider">
+                      <option>openai-compatible</option>
+                      <option>system-one</option>
+                      <option>typesafe</option>
+                      <option>liquid-d1</option>
+                    </select></label
+                  ><label>Model identity<input id="model-id" required /></label
+                  ><label
+                    >Base URL<input id="model-url" type="url" required /></label
+                  ><label
+                    >API key environment variable<input
+                      id="model-env"
+                      placeholder="Optional environment reference"
+                  /></label>
+                </div>
+                <button>Add / replace model in editor</button>
+              </form>
+              <form id="source-form">
+                <h2>Source</h2>
+                <div class="fields">
+                  <label>Name<input id="source-name" required /></label
+                  ><label
+                    >Type<select id="source-type">
+                      <option value="systemd-journal">
+                        System journal (Linux)
+                      </option>
+                      <option value="http-poller">HTTP JSON poller</option>
+                    </select></label
+                  ><label
+                    >Event type<input
+                      id="source-event"
+                      required
+                      value="service.warning" /></label
+                  ><label
+                    >Poll interval<input
+                      id="source-every"
+                      required
+                      value="30s" /></label
+                  ><label
+                    >System units (comma-separated)<input
+                      id="source-units"
+                      placeholder="ssh.service, tailscaled.service" /></label
+                  ><label
+                    >Journal severity<select id="source-priority">
+                      <option>warning</option>
+                      <option>err</option>
+                      <option>crit</option>
+                      <option>info</option>
+                    </select></label
+                  ><label
+                    >HTTP URL<input
+                      id="source-url"
+                      placeholder="https://example.invalid/feed" /></label
+                  ><label
+                    >JSON item path<input
+                      id="source-items"
+                      placeholder="items" /></label
+                  ><label
+                    >Cursor field<input
+                      id="source-cursor"
+                      placeholder="id" /></label
+                  ><label
+                    >Bearer token environment variable<input id="source-env"
+                  /></label>
+                </div>
+                <p class="help">
+                  Journal collection supports system units only, not user
+                  services. A new journal identity starts at the current tail.
+                  HTTP cursor behavior depends on the configured endpoint.
+                </p>
+                <button>Add / replace source in editor</button>
+              </form>
+              <form id="policy-form">
+                <h2>Add a policy rule</h2>
+                <div class="fields">
+                  <label
+                    >Condition field<input
+                      id="rule-field"
+                      value="result.category"
+                      required
+                  /></label>
+                  <label
+                    >Expected value or comparison<input
+                      id="rule-value"
+                      placeholder="incident, true, or > 0.8"
+                      required
+                  /></label>
+                  <label
+                    >Outcome<select id="rule-outcome">
+                      <option value="ignore">Ignore</option>
+                      <option value="notify">Notify in shadow</option>
+                    </select></label
+                  >
+                  <label
+                    >Notification adapter<select id="rule-adapter">
+                      <option value="stdout">stdout</option>
+                      <option value="discord">Discord</option>
+                    </select></label
+                  >
+                  <label
+                    >Discord webhook environment variable<input id="rule-env"
+                  /></label>
+                </div>
+                <p class="help">
+                  For a typed Choice answer, use result.category.choice.
+                  Actions, delegation, multiple conditions, and the default
+                  outcome remain editable in YAML.
+                </p>
+                <button>Add rule to editor</button>
+              </form>
+            </details>
+            <h2>Models in this draft</h2>
+            <div id="configured-models"></div>
+            <label for="interpreter-model">Default interpreter model</label
+            ><select id="interpreter-model"></select>
+            <p class="help">
+              Changing providers may also require a different interpretation
+              contract. Validation checks that contract before activation.
+            </p>
+            <h2>Policy order</h2>
+            <div id="configured-rules"></div>
+            <button id="shadow-draft">Set all draft effects to shadow</button>
+            <h2>Active connection references</h2>
+            <p class="help">
+              Environment presence only. No external connection test is made,
+              and secret values never leave the runtime.
+            </p>
+            <div id="connections"></div>
+            <h2>Sources in this draft</h2>
+            <div id="configured-sources"></div>
+            <p class="help">
+              Pause preserves the source name and cursor. Resume reads available
+              records after that cursor; it does not replay completed effects.
+              Removed or renamed sources need an explicit collection-scope
+              review.
+            </p>
+            <label for="yaml">Configuration YAML</label
+            ><textarea
+              id="yaml"
+              rows="25"
+              spellcheck="false"
+              autocomplete="off"
+            ></textarea>
+            <p class="help">
+              Only environment references belong here—never passwords, API keys,
+              or webhook URLs. Listener and database changes require a process
+              restart. Management activation permits shadow effects and ignore
+              only.
+            </p>
+            <div class="row">
+              <button id="validate">Validate</button
+              ><button id="save-draft">Save draft</button
+              ><button id="show-diff">Review difference</button>
+            </div>
+            <div id="validation" role="status"></div>
+            <details id="diff">
+              <summary>Active → editor difference</summary>
+              <pre id="diff-content"></pre>
+            </details>
+            <label class="check"
+              ><input id="apply-confirm" type="checkbox" />I reviewed the
+              difference, selected sources, model destinations, and cursor
+              behavior. Activate this saved draft in shadow.</label
+            ><button id="activate" class="primary">Activate saved draft</button>
+            <h2>Revision history and recovery</h2>
+            <p>
+              Restore loads an earlier revision into the editor. Review, save,
+              and activate it to roll back future behavior. It does not undo
+              effects already sent.
+            </p>
+            <div id="revisions"></div>
+          </div>
+        </section>
+        <section data-page="runtime" hidden>
+          <h1>Runtime</h1>
+          <p>
+            The web UI controls mrmr, not the operating system. If this process
+            is down, use its service manager to recover it.
+          </p>
+          <h2>Stop effects safely</h2>
+          <p>
+            Return to shadow blocks effects immediately before adapter dispatch,
+            including work still interpreting under an older revision. It cannot
+            recall an effect already sent. The gate survives restart and cannot
+            be lifted from this UI.
+          </p>
+          <button id="shadow" class="danger">
+            Return all effects to shadow
+          </button>
+          <h2>Operator audit</h2>
+          <button id="refresh-audit">Refresh audit</button>
+          <div id="audit"></div>
+        </section>
+      </div>
+      <footer>
+        Private runtime data. Do not share event payloads, exported
+        configuration, or search URLs outside their intended audience.
+      </footer>
+    </main>
+  </body>
+</html>

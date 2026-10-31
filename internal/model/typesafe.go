@@ -188,7 +188,8 @@ func (c *Client) interpretTypeSafe(ctx context.Context, cfg Config, questions Qu
 		normalized[id], _ = normalizeQuestion(question)
 	}
 	req := systemOneRequest{State: json.RawMessage(eventJSON), Model: cfg.Model, Questions: normalized}
-	hc := &http.Client{Timeout: requestTimeout}
+	// Redirects are not permission to move credentials or Event content.
+	hc := &http.Client{Timeout: requestTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 
 	var latencyMs int64
 	delay := retryBackoff

@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -84,22 +85,47 @@ func main() {
 func run(args []string) error {
 	fs := flag.NewFlagSet("mrmr run", flag.ContinueOnError)
 	configPath := fs.String("config", "mrmr.yaml", "path to config file")
+	controlAddr := fs.String("control-addr", "", "optional loopback management listener, e.g. 127.0.0.1:4243")
+	controlHost := fs.String("control-host", "", "exact private HTTPS proxy hostname for management")
+	controlTokenEnv := fs.String("control-token-env", "MRMR_CONTROL_TOKEN", "environment variable containing a random management token (32+ bytes)")
+	setup := fs.Bool("setup", false, "start management only when configuration is missing; requires -control-addr")
+	setupDB := fs.String("setup-db", "mrmr.db", "database path for first-run setup")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
+	if *controlAddr != "" {
+		return runManaged(*configPath, *controlAddr, *controlHost, *controlTokenEnv, *setup, *setupDB)
+	}
+	if *setup {
+		return fmt.Errorf("-setup requires -control-addr")
+	}
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		return err
 	}
 
+	// File-backed runtimes share ownership with management. Preserve legacy
+	// memory/URI database behavior; management rejects those database paths.
+	if cfg.DB.Path != ":memory:" && !strings.HasPrefix(cfg.DB.Path, "file:") {
+		lock, err := lockRuntimeDB(cfg.DB.Path)
+		if err != nil {
+			return err
+		}
+		defer lock.Close()
+	}
 	db, err := storage.Open(cfg.DB.Path)
 	if err != nil {
 		return err
 	}
 	defer db.Close()
+	blocked, err := db.EffectsBlocked()
+	if err != nil {
+		return err
+	}
 
 	rt := &runtime.Runtime{
+		EffectsBlocked:  func() bool { return blocked },
 		DB:              db,
 		Client:          &model.Client{},
 		ModelCfg:        cfg.Models[cfg.Interpret.Model],
@@ -112,6 +138,7 @@ func run(args []string) error {
 		Agents:          cfg.Agents,
 		Models:          cfg.Models,
 		InterpretByType: cfg.InterpretByType,
+		Monitors:        cfg.Monitors,
 	}
 
 	mux := http.NewServeMux()
@@ -213,6 +240,9 @@ func run(args []string) error {
 func prepareSources(ctx context.Context, configs []config.Source, db *storage.DB) ([]func(context.Context, *runtime.Runtime), error) {
 	var runners []func(context.Context, *runtime.Runtime)
 	for _, sc := range configs {
+		if sc.Paused {
+			continue
+		}
 		switch sc.Type {
 		case "http-poller":
 			p, err := source.NewHTTPPoller(sc)
