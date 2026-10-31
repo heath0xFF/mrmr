@@ -1,0 +1,67 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M69VVVAME5MKPK59WR9Z7M9R",
+  "session_id": "01a192f0-0030-7737-8376-ae46067bf9ac",
+  "strategy": "manual-commit",
+  "created_at": "2026-10-31T20:54:20.745027Z",
+  "branch": "main",
+  "checkpoints_count": 4,
+  "save_step_count": 1,
+  "files_touched": [
+    "DASHBOARD_ROADMAP.md",
+    "IMPLEMENTATION.md",
+    "README.md",
+    "SETUP.md",
+    "cmd/mrmr/control_browser_test.go",
+    "cmd/mrmr/control_config.go",
+    "cmd/mrmr/control_discord.go",
+    "cmd/mrmr/control_discord_test.go",
+    "cmd/mrmr/control_process_test.go",
+    "cmd/mrmr/control_test.go",
+    "cmd/mrmr/main.go",
+    "cmd/mrmr/managed.go",
+    "internal/dashboard/dashboard.go",
+    "internal/dashboard/dashboard_test.go",
+    "internal/dashboard/manage-monitors.js",
+    "internal/dashboard/manage-setup.js",
+    "internal/dashboard/manage.browser.cjs",
+    "internal/dashboard/manage.css",
+    "internal/dashboard/manage.html",
+    "internal/dashboard/manage.js",
+    "internal/notify/credentials.go",
+    "internal/notify/credentials_test.go",
+    "internal/notify/discord.go",
+    "internal/runtime/notify_test.go",
+    "internal/runtime/runtime.go"
+  ],
+  "agent": "Pi",
+  "model": "gpt-6-astra",
+  "turn_id": "8ad1c2b6a6ba",
+  "checkpoint_transcript_start": 424,
+  "transcript_lines_at_start": 424,
+  "compact_transcript_start": 231,
+  "token_usage": {
+    "input_tokens": 145299,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 8992512,
+    "output_tokens": 64939,
+    "api_call_count": 68
+  },
+  "redaction": {
+    "replacements": 36,
+    "layers": {
+      "betterleaks": 2,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 33,
+      "credentialed_uri": 2,
+      "entropy": 0,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  },
+  "session_metrics": {
+    "turn_count": 26
+  }
+}
