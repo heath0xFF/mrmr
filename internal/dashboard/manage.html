@@ -4,16 +4,19 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>mrmr · Manage</title>
+    <meta name="color-scheme" content="light" />
+    <link rel="stylesheet" href="signal.css" />
     <link rel="stylesheet" href="manage.css" />
+    <script src="signal.js" defer></script>
     <script src="manage.js" defer></script>
     <script src="manage-setup.js" defer></script>
     <script src="manage-monitors.js" defer></script>
   </head>
-  <body>
+  <body class="locked">
     <a class="skip" href="#main">Skip to content</a>
-    <header>
+    <header class="topbar">
       <a href="#overview" class="brand">mrmr</a
-      ><span id="host">Management</span>
+      ><span id="host" class="host">Management</span>
       <nav aria-label="Main navigation">
         <a href="#overview">Overview</a><a href="#activity">Activity</a
         ><a href="#review">Review</a><a href="#configure">Configure</a
@@ -22,10 +25,12 @@
       <button id="logout" hidden>Lock</button>
     </header>
     <main id="main">
-      <div id="notice" role="status" aria-live="polite">
-        Connect to the private management listener.
+      <!-- Notices float so a result is visible from anywhere on a long page. -->
+      <div id="notice-bar" hidden>
+        <p id="notice" role="status" aria-live="polite"></p>
+        <button id="notice-close" class="quiet" type="button">Dismiss</button>
       </div>
-      <section id="login">
+      <section id="login" class="panel">
         <h1>Open your runtime</h1>
         <p>
           This page can change mrmr. Use the operator token set in its
@@ -49,31 +54,38 @@
       </section>
       <div id="app" hidden>
         <section data-page="overview">
-          <div class="heading">
+          <div class="page-heading">
             <div>
-              <h1>Overview</h1>
-              <p>Collection, interpretation, and the boundaries on effects.</p>
+              <h1 id="overview-title" class="summary-title">Overview</h1>
+              <p id="overview-sentence"></p>
             </div>
-            <button id="refresh-overview">Refresh status</button>
+            <div class="page-tools">
+              <p id="freshness"></p>
+              <button id="refresh-overview">Refresh status</button>
+            </div>
           </div>
-          <p id="freshness" class="help"></p>
-          <div id="overview-content"></div>
-          <h2>Sources</h2>
-          <div id="source-health"></div>
+          <div id="source-health" class="tracks"></div>
+          <h2>Needs your attention</h2>
+          <div id="attention"></div>
+          <div id="overview-content" class="stored"></div>
           <h2>Model evidence</h2>
-          <p class="help">
+          <div id="model-health"></div>
+          <p class="help model-note">
             Recorded request latency is not a live endpoint health check.
           </p>
-          <div id="model-health"></div>
         </section>
         <section data-page="activity" hidden>
-          <h1>Activity</h1>
-          <p>
-            Follow the stored evidence. This list does not reorder while you
-            read it.
-          </p>
+          <div class="page-heading">
+            <div>
+              <h1>Activity</h1>
+              <p>
+                Follow the stored evidence. This list does not reorder while you
+                read it.
+              </p>
+            </div>
+          </div>
           <form id="search">
-            <label for="query">Search events</label>
+            <label for="query" class="sr-only">Search events</label>
             <div class="row">
               <input
                 id="query"
@@ -90,95 +102,123 @@
               ><button>Search</button>
             </div>
           </form>
-          <div id="events"></div>
-          <div class="row pager">
-            <button id="previous">Previous</button><span id="page-info"></span
-            ><button id="next">Next</button>
+          <div class="activity-layout">
+            <div class="activity-list">
+              <div id="events"></div>
+              <div class="row pager">
+                <button id="previous">Previous</button
+                ><span id="page-info"></span><button id="next">Next</button>
+              </div>
+            </div>
+            <section
+              id="event-detail"
+              class="panel"
+              tabindex="-1"
+              hidden
+            ></section>
           </div>
-          <section id="event-detail" tabindex="-1" hidden></section>
         </section>
         <section data-page="review" hidden>
-          <h1>Review</h1>
-          <p>
-            Record your expected result, not agreement with the model. Saving a
-            review does not rerun an event or send an effect.
-          </p>
-          <div class="row">
+          <div class="page-heading">
+            <div>
+              <h1>Review</h1>
+              <p>
+                Record your expected result, not agreement with the model.
+                Saving a review does not rerun an event or send an effect.
+              </p>
+            </div>
+          </div>
+          <h2 class="section-first">Waiting for a label</h2>
+          <div id="review-queue"></div>
+          <div class="row review-open">
             <label for="review-id">Event ID</label
             ><input id="review-id" /><button id="load-review">Load event</button
             ><a href="#activity">Find events in Activity</a>
           </div>
-          <div id="review-evidence"></div>
-          <form id="review-form" hidden>
-            <div class="fields">
-              <label
-                >Review state<select id="review-state">
-                  <option value="reviewed">Reviewed</option>
-                  <option value="uncertain">Uncertain</option>
-                  <option value="deferred">Deferred</option>
-                </select></label
-              ><label
-                >Origin<select id="review-origin">
-                  <option value="unknown">Unknown</option>
-                  <option value="real">Real event</option>
-                  <option value="synthetic">Synthetic / test</option>
-                </select></label
-              ><label
-                >Expected category<input id="category" maxlength="200" /></label
-              ><label
-                >Action required<select id="requires-action">
-                  <option value="">Choose an answer</option>
-                  <option value="true">Yes</option>
-                  <option value="false">No</option>
-                </select></label
-              ><label
-                >Expected outcome<select id="expected-outcome">
-                  <option value="">Choose an outcome</option>
-                  <option>ignore</option>
-                  <option>notify</option>
-                  <option>act</option>
-                  <option>delegate</option>
-                </select></label
-              >
-            </div>
-            <button class="primary">Save review</button>
-            <details>
-              <summary>Recorded model answer and recent label history</summary>
-              <pre id="review-history"></pre>
-            </details>
-          </form>
+          <div class="review-layout">
+            <div id="review-evidence" tabindex="-1"></div>
+            <form id="review-form" class="panel" hidden>
+              <h2>Your expected result</h2>
+              <div class="fields">
+                <label
+                  >Review state<select id="review-state">
+                    <option value="reviewed">Reviewed</option>
+                    <option value="uncertain">Uncertain</option>
+                    <option value="deferred">Deferred</option>
+                  </select></label
+                ><label
+                  >Origin<select id="review-origin">
+                    <option value="unknown">Unknown</option>
+                    <option value="real">Real event</option>
+                    <option value="synthetic">Synthetic / test</option>
+                  </select></label
+                ><label
+                  >Expected category<input
+                    id="category"
+                    list="category-options"
+                    maxlength="200" /><datalist
+                    id="category-options"
+                  ></datalist></label
+                ><label
+                  >Action required<select id="requires-action">
+                    <option value="">Choose an answer</option>
+                    <option value="true">Yes</option>
+                    <option value="false">No</option>
+                  </select></label
+                ><label
+                  >Expected outcome<select id="expected-outcome">
+                    <option value="">Choose an outcome</option>
+                    <option>ignore</option>
+                    <option>notify</option>
+                    <option>act</option>
+                    <option>delegate</option>
+                  </select></label
+                >
+              </div>
+              <button class="primary">Save review</button>
+              <details>
+                <summary>Recorded model answer and recent label history</summary>
+                <pre id="review-history"></pre>
+              </details>
+            </form>
+          </div>
           <h2>Evaluate a candidate</h2>
-          <p>
-            Uses up to 50 most recent events explicitly reviewed as real. The
-            report saves the selected IDs and label snapshots. Uncertain,
-            deferred, synthetic, and unknown-origin events are excluded.
-          </p>
-          <p>
-            Policy comparison uses stored Decisions without inference.
-            Interpreter evaluation can make bounded model calls to active
-            configured endpoints. Neither executes adapters or tests ingestion
-            filters, deduplication, or the depth guard.
-          </p>
-          <label for="eval-mode">Evaluation mode</label
-          ><select id="eval-mode">
-            <option value="policy">Policy comparison · no model calls</option>
-            <option value="interpreter">
-              Interpreter + policy · up to 50 events, bounded retries
-            </option></select
-          ><label class="check"
-            ><input id="eval-confirm" type="checkbox" />I reviewed the candidate
-            in Configure and authorize this evaluation, including sending event
-            data to its configured model endpoints when selected.</label
-          >
-          <div class="row">
-            <button id="evaluate">Evaluate editor candidate</button
-            ><button id="cancel-eval">Cancel current evaluation</button
-            ><button id="refresh-evals">Refresh reports</button>
+          <div class="panel evaluate">
+            <p>
+              Uses up to 50 most recent events explicitly reviewed as real. The
+              report saves the selected IDs and label snapshots. Uncertain,
+              deferred, synthetic, and unknown-origin events are excluded.
+            </p>
+            <p>
+              Policy comparison uses stored Decisions without inference.
+              Interpreter evaluation can make bounded model calls to active
+              configured endpoints. Neither executes adapters or tests ingestion
+              filters, deduplication, or the depth guard.
+            </p>
+            <label for="eval-mode">Evaluation mode</label
+            ><select id="eval-mode">
+              <option value="policy">Policy comparison · no model calls</option>
+              <option value="interpreter">
+                Interpreter + policy · up to 50 events, bounded retries
+              </option></select
+            ><label class="check"
+              ><input id="eval-confirm" type="checkbox" />I reviewed the
+              candidate in Configure and authorize this evaluation, including
+              sending event data to its configured model endpoints when
+              selected.</label
+            >
+            <div class="row">
+              <button id="evaluate" class="primary">
+                Evaluate editor candidate
+              </button>
+              <button id="cancel-eval">Cancel current evaluation</button>
+              <button id="refresh-evals" class="quiet">Refresh reports</button>
+            </div>
           </div>
           <div id="evaluations"></div>
         </section>
         <section data-page="configure" hidden>
-          <div class="heading">
+          <div class="page-heading">
             <div>
               <h1 id="config-title">Current configuration</h1>
               <p id="config-description">
@@ -190,21 +230,22 @@
               <button id="back-current" hidden>
                 Back to current configuration
               </button>
-              <button id="reload-config">Reload saved state</button>
+              <button id="reload-config" class="quiet">
+                Reload saved state
+              </button>
             </div>
           </div>
+          <!-- Sticky so Save stays reachable in long forms. With nothing to save
+               the buttons hide and only the state remains. -->
           <div class="config-actions" aria-label="Configuration actions">
-            <div class="row">
-              <button id="save-draft" class="primary">
-                Save configuration
-              </button>
+            <div class="config-status">
+              <span id="config-lamp" class="lamp"></span>
+              <p id="config-state" role="status"></p>
+            </div>
+            <div class="row" id="config-buttons">
+              <button id="save-draft">Save configuration</button>
               <button id="review-config">Review and apply</button>
             </div>
-            <p id="config-state" class="help" role="status"></p>
-            <p class="help">
-              Save keeps monitor edits as a draft. Apply changes collection and
-              rules.
-            </p>
           </div>
           <p id="setup-note" class="warning" hidden>
             First-run setup: collection and effects are disabled until a valid
@@ -212,11 +253,11 @@
             activation.
           </p>
           <div id="current-config">
-            <div class="row">
+            <div class="row monitor-tools">
               <button id="add-monitor" class="primary">
                 Add monitoring service
               </button>
-              <button id="open-advanced" type="button">
+              <button id="open-advanced" type="button" class="quiet">
                 Advanced configuration
               </button>
             </div>
@@ -235,11 +276,19 @@
               Connections can be reused. The guide edits one monitor; activation
               applies the whole draft.
             </p>
-            <ol class="setup-steps" aria-label="Setup progress">
-              <li data-setup-marker="0" aria-current="step">1. Service</li>
-              <li data-setup-marker="1">2. Model</li>
-              <li data-setup-marker="2">3. Notifications</li>
-              <li data-setup-marker="3">4. Test and start</li>
+            <ol class="track-line setup-steps" aria-label="Setup progress">
+              <li class="stage" data-setup-marker="0" aria-current="step">
+                <span class="lamp"></span><strong>Service</strong>
+              </li>
+              <li class="stage" data-setup-marker="1">
+                <span class="lamp"></span><strong>Model</strong>
+              </li>
+              <li class="stage" data-setup-marker="2">
+                <span class="lamp"></span><strong>Notifications</strong>
+              </li>
+              <li class="stage" data-setup-marker="3">
+                <span class="lamp"></span><strong>Test and start</strong>
+              </li>
             </ol>
             <form id="setup-form" novalidate>
               <fieldset data-setup-step="0">
@@ -526,25 +575,63 @@
               </fieldset>
             </form>
             <p id="setup-status" role="status"></p>
-            <button id="setup-open-advanced" type="button">
+            <button id="setup-open-advanced" type="button" class="quiet">
               Continue in Advanced configuration
             </button>
           </div>
           <div id="advanced-config" hidden>
-            <div class="heading">
-              <h2>Advanced configuration</h2>
+            <div class="page-heading">
+              <div>
+                <h2>Advanced configuration</h2>
+                <p>
+                  Forms edit shared defaults and sources. Per-monitor contracts
+                  are preserved in YAML under <code>monitors</code>. Validation
+                  checks the structure, not model connectivity. Nothing changes
+                  until activation.
+                </p>
+              </div>
               <button id="open-guided" type="button">
                 Add a monitor to this draft
               </button>
             </div>
-            <p>
-              Forms below edit shared defaults and sources. Per-monitor
-              contracts are preserved in YAML under <code>monitors</code>.
-              Validation checks the structure, not model connectivity. Nothing
-              changes until activation.
+            <div class="advanced-layout">
+              <div class="advanced-editor panel">
+                <div class="editor-head">
+                  <label for="yaml">Configuration YAML</label>
+                  <button id="load-active" class="quiet">
+                    Load active into editor
+                  </button>
+                </div>
+                <textarea
+              id="yaml"
+              rows="25"
+              spellcheck="false"
+              autocomplete="off"
+            ></textarea>
+            <p class="help">
+              Only credential references belong here—never passwords, API keys,
+              or webhook URLs. Listener and database changes require a process
+              restart. Management permits explicitly confirmed live
+              notifications. Actions and delegation must remain in shadow.
             </p>
-            <button id="load-active">Load active into editor</button>
-            <details>
+            <div class="row">
+              <button id="validate">Validate</button>
+              <button id="show-diff">Review difference</button>
+            </div>
+            <div id="validation" role="status"></div>
+            <details id="diff">
+              <summary>Active → editor difference</summary>
+              <pre id="diff-content"></pre>
+            </details>
+            <label class="check"
+              ><input id="apply-confirm" type="checkbox" />I reviewed the
+              difference, selected sources, model destinations, and cursor
+              behavior. I authorize live notifications configured in this saved
+              draft. Actions and delegation remain in shadow.</label
+            ><button id="activate" class="primary apply">
+              Apply saved configuration
+            </button>
+                <details>
               <summary>Model, source, and policy forms</summary>
               <p>
                 These forms update the editor, not the running configuration.
@@ -681,6 +768,9 @@
                 <button>Add rule to editor</button>
               </form>
             </details>
+              </div>
+              <div class="advanced-side">
+                <section class="side-group">
             <h2>Models in this draft</h2>
             <div id="configured-models"></div>
             <label for="interpreter-model">Default interpreter model</label
@@ -689,15 +779,13 @@
               Changing providers may also require a different interpretation
               contract. Validation checks that contract before activation.
             </p>
+                </section>
+                <section class="side-group">
             <h2>Policy order</h2>
             <div id="configured-rules"></div>
-            <button id="shadow-draft">Set all draft effects to shadow</button>
-            <h2>Active connection references</h2>
-            <p class="help">
-              Credential presence only. No external connection test is made, and
-              secret values never leave the runtime.
-            </p>
-            <div id="connections"></div>
+            <button id="shadow-draft" class="quiet">Set all draft effects to shadow</button>
+                </section>
+                <section class="side-group">
             <h2>Sources in this draft</h2>
             <div id="configured-sources"></div>
             <p class="help">
@@ -706,36 +794,16 @@
               Removed or renamed sources need an explicit collection-scope
               review.
             </p>
-            <label for="yaml">Configuration YAML</label
-            ><textarea
-              id="yaml"
-              rows="25"
-              spellcheck="false"
-              autocomplete="off"
-            ></textarea>
+                </section>
+                <section class="side-group">
+            <h2>Active connection references</h2>
             <p class="help">
-              Only credential references belong here—never passwords, API keys,
-              or webhook URLs. Listener and database changes require a process
-              restart. Management permits explicitly confirmed live
-              notifications. Actions and delegation must remain in shadow.
+              Credential presence only. No external connection test is made, and
+              secret values never leave the runtime.
             </p>
-            <div class="row">
-              <button id="validate">Validate</button>
-              <button id="show-diff">Review difference</button>
-            </div>
-            <div id="validation" role="status"></div>
-            <details id="diff">
-              <summary>Active → editor difference</summary>
-              <pre id="diff-content"></pre>
-            </details>
-            <label class="check"
-              ><input id="apply-confirm" type="checkbox" />I reviewed the
-              difference, selected sources, model destinations, and cursor
-              behavior. I authorize live notifications configured in this saved
-              draft. Actions and delegation remain in shadow.</label
-            ><button id="activate" class="primary">
-              Apply saved configuration
-            </button>
+            <div id="connections"></div>
+                </section>
+                <section class="side-group">
             <h2>Revision history and recovery</h2>
             <p>
               Restore loads an earlier revision into the editor. Review, save,
@@ -743,32 +811,47 @@
               effects already sent.
             </p>
             <div id="revisions"></div>
+                </section>
+              </div>
+            </div>
           </div>
         </section>
         <section data-page="runtime" hidden>
-          <h1>Runtime</h1>
-          <p>
-            The web UI controls mrmr, not the operating system. If this process
-            is down, use its service manager to recover it.
-          </p>
-          <h2>Stop effects safely</h2>
-          <p>
-            Return to shadow blocks effects immediately before adapter dispatch,
-            including work still interpreting under an older revision. It cannot
-            recall an effect already sent. The gate survives restart and cannot
-            be lifted from this UI.
-          </p>
-          <button id="shadow" class="danger">
-            Return all effects to shadow
-          </button>
-          <h2>Operator audit</h2>
-          <button id="refresh-audit">Refresh audit</button>
+          <div class="page-heading">
+            <div>
+              <h1>Runtime</h1>
+              <p>
+                The web UI controls mrmr, not the operating system. If this
+                process is down, use its service manager to recover it.
+              </p>
+            </div>
+          </div>
+          <div class="panel gate">
+            <div class="gate-state">
+              <span id="gate-lamp" class="lamp"></span>
+              <h2 id="gate-title">Safety gate</h2>
+            </div>
+            <p>
+              Return to shadow blocks effects immediately before adapter
+              dispatch, including work still interpreting under an older
+              revision. It cannot recall an effect already sent. The gate
+              survives restart and cannot be lifted from this UI.
+            </p>
+            <button id="shadow" class="danger">
+              Return all effects to shadow
+            </button>
+          </div>
+          <div class="section-head">
+            <h2>Operator audit</h2>
+            <button id="refresh-audit" class="quiet">Refresh audit</button>
+          </div>
           <div id="audit"></div>
         </section>
       </div>
       <footer>
-        Private runtime data. Do not share event payloads, exported
-        configuration, or search URLs outside their intended audience.
+        Private runtime data. Operator changes are recorded in the audit log. Do
+        not share event payloads, exported configuration, or search URLs outside
+        their intended audience.
       </footer>
     </main>
   </body>

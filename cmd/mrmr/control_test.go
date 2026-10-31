@@ -87,6 +87,10 @@ func TestManagementAccessBoundary(t *testing.T) {
 		want                                            int
 	}{
 		{"GET", "/manage/", "127.0.0.1:1", "localhost", "", "", "", 200},
+		// The shared Signal Box assets belong to the public shell: the login view
+		// needs them before any token exists, and they hold no runtime data.
+		{"GET", "/manage/signal.css", "127.0.0.1:1", "localhost", "", "", "", 200},
+		{"GET", "/manage/signal.js", "127.0.0.1:1", "localhost", "", "", "", 200},
 		{"GET", "/manage", "127.0.0.1:1", "localhost", "", "", "", 307},
 		{"GET", "/manage/api/state", "127.0.0.1:1", "localhost", "", "", "", 401},
 		{"POST", "/manage/api/shadow", "127.0.0.1:1", "localhost", testControlToken, "http://evil.invalid", "1", 403},

@@ -67,13 +67,22 @@ function details(label, value) {
 function renderOverview(data) {
   const openKeys = new Set([...document.querySelectorAll('details[data-keep-id][open]')].map(el => el.dataset.keepId));
   const focusedKey = document.activeElement?.closest('[data-keep-id]')?.dataset.keepId;
-  const sourceStates = [];
   const s = data.summary;
   state.lastAt = data.at;
   $('host-name').textContent = data.hostname || 'Runtime';
   document.title = `${data.hostname || 'Runtime'} · mrmr`;
-  $('connection').className = 'connection live';
-  $('connection').textContent = `Runtime answered · ${stamp(data.at)} · refreshes every 10 seconds`;
+  const reading = Signal.assess(data);
+  $('summary-title').textContent = reading.title;
+  $('summary-title').dataset.tone = reading.tone;
+  $('summary-sentence').textContent = reading.sentence;
+  $('connection').className = 'connection';
+  $('connection').textContent = `Runtime answered ${stamp(data.at)}. Refreshes every 10 seconds.`;
+  // A track's name filters Activity to that source, tying each status to evidence.
+  Signal.renderTracks($('tracks'), reading.tracks, {
+    href: name => `${location.pathname}?q=${encodeURIComponent(name)}#activity`,
+    go: name => { $('query').value = name; $('view').value = 'all'; search(); $('activity').scrollIntoView({block: 'start'}); },
+  });
+  if (!data.sources.length) $('tracks').append(node('p', 'No pull sources configured; HTTP ingress only.', 'help'));
   $('runtime-evidence').textContent = `Runtime view started ${stamp(data.started_at)}. Poll evidence resets on restart or configuration activation.`;
   $('totals').replaceChildren();
   for (const [value, label, view] of [[s.events, 'stored events', 'all'], [s.unlabeled, 'unlabeled', 'unlabeled'], [s.shadow, 'shadow executions'], [s.ignored, 'ignore executions'], [s.pending, 'pending executions']]) {
@@ -126,7 +135,6 @@ function renderOverview(data) {
       tone = now - finished > threshold ? 'shadow' : 'ok';
     }
     if (!source.paused && !started && now - new Date(data.started_at) > threshold) { status = 'First poll not observed'; tone = 'shadow'; }
-    sourceStates.push(`${source.name}: ${status.toLowerCase()}`);
     el.append(node('h3', source.name), node('p', status, `state ${tone}`));
     el.append(node('p', `Last success ${age(h.last_success, now)}`, 'help'));
     el.append(node('p', `${source.priority ? `${source.priority} or higher` : source.type} · every ${source.every_ms / 1000}s`, 'help'));
@@ -137,11 +145,13 @@ function renderOverview(data) {
       const list = node('ul', undefined, 'units'); source.units.forEach(unit => list.append(node('li', unit)));
       scope.append(list); el.append(scope);
     } else {
-      el.append(node('p', `${source.event_type} · last poll started ${stamp(h.started_at)}`, 'help'));
+      // A source that has not polled reports Go's zero time, not an empty value,
+      // so ask date() whether the timestamp is real. The sentence then changes
+      // shape rather than splicing "Not observed" into "last poll started".
+      el.append(node('p', `${source.event_type} · ${date(h.started_at) ? `last poll started ${stamp(h.started_at)}` : 'no poll observed'}`, 'help'));
     }
     $('sources').append(el);
   }
-  $('source-status').textContent = sourceStates.join(' · ') || 'No pull sources configured; HTTP ingress only.';
   if (!data.sources.length) $('sources').append(node('p', 'No pull sources configured. Events can still arrive through the HTTP API.'));
   $('configuration').replaceChildren();
   $('configuration').append(node('p', `Default interpreter: ${data.interpreter || 'not configured'}`));
@@ -206,8 +216,7 @@ function renderEvents(page) {
     });
     content.append(button, node('span', `${e.source} · ${e.type}`, 'event-source'), node('span', e.message || '(No message field)', 'event-message'));
     const outcome = node('td');
-    const label = ['shadow', 'pending', 'error', 'filtered'].includes(e.execution_status) ? `${e.outcome} · ${e.execution_status}` : e.outcome || 'No execution yet';
-    outcome.append(node('span', label, `state outcome-state ${e.execution_status === 'shadow' ? 'shadow' : e.execution_status === 'error' ? 'error' : ''}`));
+    outcome.append(Signal.outcomeTag(e));
     outcome.append(node('span', `Decision: ${e.decision_status || 'not recorded'}${e.labeled ? ' · labeled' : ' · unlabeled'}`, `secondary ${['errored', 'invalid'].includes(e.decision_status) ? 'state error' : ''}`));
     row.append(received, content, outcome, node('td', ms(e.latency_ms)));
     for (const cell of row.children) cell.setAttribute('role', 'cell');
@@ -233,6 +242,9 @@ async function refresh() {
     renderOverview(overview); renderEvents(page);
   } catch (error) {
     if (state.controller !== controller) return;
+    $('summary-title').textContent = 'The runtime is not answering';
+    $('summary-title').dataset.tone = 'stop';
+    $('summary-sentence').textContent = 'These tracks show the last evidence received and may be stale.';
     $('connection').className = 'connection warning';
     $('connection').textContent = `Live data unavailable. ${error.name === 'AbortError' ? 'Request timed out.' : error.message} Last update: ${stamp(state.lastAt)}. Check the runtime and your private connection, then retry.`;
     $('event-status').textContent = 'Displayed events may be stale. Refresh now to retry.';
@@ -265,6 +277,7 @@ async function openEvent(id, moveFocus = false) {
     if (state.detailController !== controller) return;
     const root = $('detail-content'), e = ins.event;
     root.append(node('p', `${e.subject || e.type} · ${e.source} · event time ${stamp(e.timestamp)}`));
+    root.append(Signal.stageList(Signal.eventStages(ins)));
     root.append(node('h3', 'Recorded result'));
     if (ins.executions?.length) {
       for (const x of ins.executions) root.append(node('p', executionSummary(x)));

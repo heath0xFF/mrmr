@@ -1,363 +1,483 @@
-/* Reuse the runtime's restrained palette. The management surface makes
-   authority and unsaved state explicit rather than relying on status color. */
-:root {
-  font:
-    16px/1.55 system-ui,
-    -apple-system,
-    sans-serif;
-  color: #192e40;
-  background: #fff;
-  --ink: #192e40;
-  --muted: #4e6477;
-  --blue: #173e67;
-  --line: #c5d2de;
-  --paper: #eef3f7;
-  --amber: #a34b14;
+/* Page-specific layout for /manage/. Tokens, controls, lamps, tracks, and tables
+   live in signal.css so this page and the read-only dashboard stay one system. */
+
+/* Sections and navigation mean nothing before unlock, and links to them would
+   lead nowhere: the app is hidden until a token is accepted. */
+body.locked .topbar nav {
+  display: none;
 }
-* {
-  box-sizing: border-box;
+#login {
+  max-width: 520px;
+  margin: 8vh auto 0;
+  padding: 24px;
 }
-body {
+#login h1 {
+  margin-bottom: 10px;
+  font-size: 1.6rem;
+}
+#login form {
+  margin: 16px 0;
+}
+#login button {
+  margin-top: 12px;
+}
+#login input {
+  width: 100%;
+}
+#login .help {
   margin: 0;
 }
-a {
-  color: var(--blue);
-  text-underline-offset: 4px;
-}
-::selection {
-  background: #dfeaf4;
-  color: #102e4e;
-}
-:focus-visible {
-  outline: 3px solid var(--amber);
-  outline-offset: 3px;
-}
-header {
+
+/* A floating result stays visible from the bottom of a long editor. It sits at
+   the bottom edge so it never covers a focused field scrolled to the top. */
+#notice-bar {
+  position: fixed;
+  z-index: 4;
+  left: 50%;
+  bottom: 16px;
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
-  gap: 18px;
-  padding: 14px 28px;
-  background: var(--blue);
-  color: white;
+  gap: 14px;
+  width: min(640px, calc(100vw - 32px));
+  padding: 8px 8px 8px 16px;
+  border-radius: 8px;
+  background: var(--graphite);
+  color: var(--white);
+  box-shadow: 0 6px 20px rgb(32 36 42 / 28%);
+  transform: translateX(-50%);
 }
-header a {
-  color: #e0eaf4;
-  text-decoration: none;
-  padding: 8px 0;
+#notice-bar[data-tone="error"] {
+  background: var(--stop-ink);
 }
-header a[aria-current="page"] {
-  color: #fff;
-  text-decoration: underline;
-  text-decoration-thickness: 2px;
+#notice {
+  flex: 1;
+  margin: 0;
+  max-height: 30vh;
+  overflow: auto;
+  font-size: 0.875rem;
+  overflow-wrap: anywhere;
 }
-header nav {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 20px;
-  margin-left: auto;
+#notice-close {
+  color: var(--white);
+  flex: none;
 }
-.brand {
-  font-size: 1.5rem;
-  font-weight: 750;
-  color: #fff;
+#notice-close:hover {
+  background: rgb(255 255 255 / 15%);
+  color: var(--white);
 }
-main {
-  max-width: 1180px;
-  margin: auto;
-  padding: 28px;
+#notice-bar :focus-visible {
+  outline-color: var(--white);
 }
-h1 {
-  font:
-    500 2.25rem/1.2 Charter,
-    Georgia,
-    serif;
-  margin: 12px 0;
-  color: #102e4e;
-}
-h2 {
-  font-size: 1.15rem;
-  margin: 30px 0 12px;
-}
-h3 {
-  font-size: 1rem;
-}
-p {
-  max-width: 74ch;
-  margin: 0 0 14px;
-}
-/* Keep Save within reach while editing long forms, without covering the focused
-   field when the browser scrolls to a validation error or keyboard target. */
-.config-actions {
-  position: sticky;
-  top: 0;
-  z-index: 2;
-  padding: 12px 0;
-  margin-bottom: 20px;
-  background: #fff;
-  border-bottom: 1px solid var(--line);
-}
-.config-actions .row {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  max-width: 430px;
-}
-.config-actions p {
-  margin: 6px 0 0;
-}
-[data-page="configure"] input,
-[data-page="configure"] select,
-[data-page="configure"] button,
-[data-page="configure"] legend {
-  scroll-margin-top: 180px;
-}
-button,
-input,
-select,
-textarea {
-  font: inherit;
-  color: var(--ink);
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: #fff;
-  min-height: 44px;
-  padding: 9px 12px;
-  max-width: 100%;
-}
-button {
-  cursor: pointer;
-  font-weight: 600;
-}
-button:hover {
-  background: var(--paper);
-  border-color: var(--blue);
-}
-button:disabled {
-  opacity: 0.6;
-  cursor: wait;
-}
-.primary {
-  background: var(--blue);
-  color: #fff;
-}
-.primary:hover {
-  background: #102e4e;
-  color: #fff;
-}
-.danger {
-  color: #9a292d;
-  border-color: #9a292d;
-}
+
 label {
   display: block;
-  margin: 12px 0 6px;
-  font-size: 0.875rem;
+  margin: 12px 0 5px;
+  font-size: 0.8125rem;
   font-weight: 600;
 }
 input:not([type="checkbox"]),
 textarea {
   width: 100%;
 }
-input,
 textarea {
-  caret-color: var(--blue);
-}
-input::placeholder {
-  color: var(--muted);
-}
-textarea,
-pre {
-  font:
-    0.8125rem/1.6 ui-monospace,
-    SFMono-Regular,
-    Consolas,
-    monospace;
-}
-textarea {
+  display: block;
+  min-height: 420px;
   resize: vertical;
-  min-height: 240px;
-}
-pre {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  max-height: 500px;
-  overflow: auto;
-  padding: 16px;
-  background: var(--paper);
-  border-radius: 6px;
-  scrollbar-color: var(--line) var(--paper);
+  font-size: 0.8125rem;
+  line-height: 1.6;
 }
 form {
-  margin: 16px 0;
+  margin: 0;
 }
-.row,
-.heading {
+details {
+  margin: 12px 0;
+}
+details > summary {
+  padding: 6px 0;
+}
+.row {
   display: flex;
-  align-items: center;
-  gap: 12px;
   flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
 }
 .row input {
   flex: 1;
   min-width: 160px;
-}
-.heading {
-  justify-content: space-between;
+  width: auto;
 }
 .fields {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px 24px;
+  gap: 10px 20px;
+  margin: 12px 0 16px;
+}
+.fields label {
+  margin: 0;
 }
 .fields input,
 .fields select,
 #setup-form label > select {
   display: block;
   width: 100%;
-  margin-top: 6px;
-}
-.fields label {
-  margin: 0;
+  margin-top: 5px;
 }
 .check {
   display: flex;
-  align-items: start;
-  gap: 12px;
-  max-width: 78ch;
-  margin: 20px 0;
+  align-items: flex-start;
+  gap: 10px;
+  max-width: 76ch;
+  margin: 16px 0;
+  font-weight: 500;
 }
 .check input {
-  flex-shrink: 0;
-  min-height: 24px;
-  width: 24px;
-  margin: 0;
+  flex: none;
+  width: 18px;
+  min-height: 18px;
+  margin: 2px 0 0;
+  accent-color: var(--graphite);
 }
-#notice,
 .warning {
-  padding: 12px 16px;
-  background: #fff0e1;
-  color: #854011;
+  padding: 10px 14px;
   border-radius: 6px;
-  margin-bottom: 20px;
+  background: var(--amber-wash);
+  color: var(--amber-ink);
 }
-#notice:empty {
-  display: none;
-}
-.help,
-footer {
-  font-size: 0.8125rem;
-  color: var(--muted);
-}
+
+/* Compact rows used across Advanced: name, one line of fact, then actions. */
 .record {
-  padding: 16px 0;
-  border-bottom: 1px solid var(--line);
+  padding: 10px 0;
+  border-top: 1px solid var(--line-soft);
   overflow-wrap: anywhere;
 }
+.record h3 {
+  margin-bottom: 2px;
+}
 .record p {
-  margin: 4px 0;
+  margin: 0 0 6px;
+  color: var(--muted);
+  font-size: 0.8125rem;
 }
-.record a {
-  font-weight: 600;
+.record button {
+  margin: 2px 4px 2px 0;
+  font-size: 0.8125rem;
 }
-.record .row {
-  margin-top: 10px;
+
+/* Overview */
+.stored {
+  margin-top: 16px;
 }
-details {
-  margin: 16px 0;
+.stored-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 20px;
+  margin: 0;
+  max-width: none;
+  font-size: 0.875rem;
 }
-summary {
-  padding: 10px 0;
-  color: var(--blue);
-  cursor: pointer;
+.stored-line strong {
+  font-weight: 700;
+}
+.model-note {
+  margin: 8px 0 0;
+}
+.cell-message {
+  overflow-wrap: anywhere;
+}
+.attention-table .cell-subject {
+  white-space: nowrap;
+}
+.attention-table td:last-child,
+.events-table td:last-child {
+  width: 1%;
+  white-space: nowrap;
+}
+
+.models-table td,
+.audit-table td:nth-child(-n + 4) {
+  white-space: nowrap;
+}
+
+/* Activity: the list and the event sit side by side, so reading one event never
+   loses your place in fifty. */
+#search {
+  margin-bottom: 12px;
+}
+.activity-layout {
+  display: grid;
+  gap: 16px;
+}
+.activity-layout:has(#event-detail:not([hidden])) {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  align-items: start;
+}
+.activity-list {
+  min-width: 0;
+}
+/* With the pane open the source column is the first thing to give way. */
+.activity-layout:has(#event-detail:not([hidden])) .cell-source,
+.activity-layout:has(#event-detail:not([hidden])) th:nth-child(2) {
+  display: none;
+}
+.cell-source {
+  color: var(--muted);
+  font-size: 0.8125rem;
+  white-space: nowrap;
+}
+.cell-event .cell-subject {
+  display: block;
+}
+.cell-event .cell-message {
+  display: block;
+  margin-top: 1px;
+  /* Two lines keep fifty rows scannable; the detail pane has the whole message. */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  font-size: 0.8125rem;
 }
 .pager {
   justify-content: space-between;
-  margin: 18px 0;
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 0.875rem;
 }
 #event-detail {
-  border-top: 1px solid var(--line);
-  margin-top: 30px;
-  padding-top: 20px;
+  position: sticky;
+  top: 12px;
+  min-width: 0;
+  max-height: calc(100vh - 24px);
+  overflow: auto;
+  scrollbar-color: var(--dark-lamp) var(--surface);
 }
-#page-info {
-  font-variant-numeric: tabular-nums;
+#event-detail:focus {
+  outline: none;
 }
-#login {
-  max-width: 620px;
+.detail-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px 16px;
 }
-#login button {
-  margin-top: 16px;
+#event-detail h3,
+#review-evidence h3 {
+  margin: 16px 0 6px;
 }
-footer {
-  margin-top: 40px;
-  padding-top: 20px;
-  border-top: 1px solid var(--line);
+#event-detail > .help {
+  margin: 2px 0 14px;
 }
-.skip:not(:focus) {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip-path: inset(50%);
+.detail-message {
+  max-width: none;
+  margin: 14px 0 0;
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: var(--ground);
+  font-size: 0.875rem;
+  overflow-wrap: anywhere;
 }
-.skip:focus {
-  display: block;
-  padding: 10px;
+#event-detail .track-line,
+#review-evidence .track-line {
+  margin-top: 12px;
 }
-/* The guide gives one decision the full working area; the advanced editor
-   keeps its existing layout rather than competing with first-run controls. */
-.setup-steps {
+#event-detail pre {
+  margin-bottom: 8px;
+}
+
+/* Review */
+.section-first {
+  margin-top: 0;
+}
+.review-open {
+  margin: 12px 0 18px;
+  font-size: 0.875rem;
+}
+.review-open label {
+  margin: 0;
+}
+.review-open input {
+  max-width: 340px;
+}
+.review-layout {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  list-style: none;
-  padding: 0;
-  margin: 0 0 32px;
-  border-bottom: 1px solid var(--line);
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+  align-items: start;
+  gap: 16px;
 }
-.setup-steps li {
-  padding: 12px;
+#review-evidence:focus {
+  outline: none;
+}
+#review-evidence:empty {
+  display: none;
+}
+#review-evidence .panel > p:last-child {
+  margin: 10px 0 0;
   color: var(--muted);
+  font-size: 0.8125rem;
 }
-.setup-steps [aria-current="step"] {
-  color: var(--blue);
-  background: var(--paper);
-  box-shadow: inset 0 -2px var(--blue);
-  font-weight: 650;
+#review-form h2 {
+  margin-bottom: 8px;
 }
-#setup-form {
-  max-width: 100%;
+.evaluate p {
+  font-size: 0.875rem;
+}
+#evaluations {
+  margin-top: 10px;
+}
+
+/* Configure. The toolbar turns violet only while a draft exists, so "this is not
+   running yet" is impossible to miss and means exactly one thing. */
+.config-actions {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+  min-height: 52px;
+  margin-bottom: 16px;
+  padding: 8px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+.config-actions.is-draft {
+  border-color: var(--draft);
+  background: var(--draft-wash);
+}
+.config-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.config-status p {
+  margin: 0;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+[data-page="configure"] input,
+[data-page="configure"] select,
+[data-page="configure"] button,
+[data-page="configure"] legend {
+  scroll-margin-top: 90px;
+}
+.monitor-tools {
+  margin-bottom: 12px;
+}
+#active-monitors {
+  display: grid;
+  gap: 8px;
+}
+.monitor-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px 20px;
+}
+.monitor-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 3px 0 0;
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+.monitor-facts {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr 1fr;
+  gap: 12px 20px;
+  margin: 12px 0 8px;
+}
+.monitor-facts dt {
+  color: var(--muted);
+  font-size: 0.8125rem;
+}
+.monitor-facts dd {
+  margin: 1px 0 0;
+  font-size: 0.875rem;
+  overflow-wrap: anywhere;
+}
+.monitor-record .help {
+  margin: 4px 0 0;
+}
+#current-config > .help {
+  margin-top: 12px;
+}
+
+/* Guide */
+#setup-intro {
+  max-width: 72ch;
+}
+.setup-steps {
+  max-width: 760px;
+  margin: 8px 0 24px;
+}
+.setup-steps .stage[aria-current="step"] strong {
+  font-weight: 750;
+}
+.setup-steps .stage:not([aria-current="step"]) strong {
+  color: var(--muted);
+  font-weight: 500;
+}
+#setup-form fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
 }
 #setup-form [data-setup-step="0"],
 #setup-form [data-setup-step="1"],
 #setup-form [data-setup-step="2"] {
-  max-width: 880px;
-}
-#setup-form fieldset {
-  border: 0;
-  padding: 0;
-  margin: 0;
-  min-width: 0;
+  max-width: 760px;
 }
 #setup-form legend {
+  margin-bottom: 8px;
   padding: 0;
-  margin-bottom: 12px;
-  font-size: 1.25rem;
+  font-size: 1.2rem;
   font-weight: 650;
 }
-#setup-form .fields {
-  margin: 24px 0 16px;
+#setup-form legend:focus {
+  outline: none;
 }
 #setup-form .row {
-  margin-top: 24px;
+  margin-top: 20px;
+}
+#setup-new-connection,
+#setup-discord {
+  margin-top: 14px;
+  padding: 2px 16px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
 }
 #setup-credential-optional {
   font-weight: 400;
 }
+#setup-connection-info {
+  margin-top: 8px;
+  overflow-wrap: anywhere;
+}
+.setup-review {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  margin-top: 12px;
+}
+.setup-review > * {
+  min-width: 0;
+}
 .setup-summary {
   display: grid;
-  grid-template-columns: 140px minmax(0, 1fr);
-  gap: 12px 20px;
-  margin: 12px 0 24px;
+  grid-template-columns: 110px minmax(0, 1fr);
+  gap: 6px 16px;
+  margin: 0 0 12px;
+  font-size: 0.875rem;
 }
 .setup-summary dt {
   color: var(--muted);
@@ -366,128 +486,146 @@ footer {
   margin: 0;
   overflow-wrap: anywhere;
 }
-.setup-review {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 40px;
-  margin-top: 20px;
-  padding-bottom: 24px;
-  border-bottom: 1px solid var(--line);
-}
-.setup-review > * {
-  min-width: 0;
-}
 .setup-test {
-  padding: 20px;
-  background: var(--paper);
+  padding: 14px 18px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+.setup-test h2 {
+  margin-bottom: 6px;
+  font-size: 1rem;
 }
 .setup-test p {
   font-size: 0.875rem;
 }
-.setup-test h2 {
-  font-size: 1rem;
-  margin: 0 0 8px;
-}
 #setup-test-result {
-  margin-top: 16px;
-  overflow-wrap: anywhere;
-}
-#setup-status:not(:empty) {
-  padding: 16px;
-  background: var(--paper);
-}
-#setup-start:disabled {
-  cursor: not-allowed;
-}
-.monitor-record {
-  padding: 28px 0;
-  border-bottom: 1px solid var(--line);
-}
-.monitor-record .heading h2,
-.monitor-record .heading p {
-  margin: 0;
-}
-.monitor-facts {
-  display: grid;
-  grid-template-columns: 1.3fr 1fr 1fr;
-  gap: 20px;
-  margin: 20px 0;
-}
-.monitor-facts dt {
-  color: var(--muted);
-  font-size: 0.875rem;
-}
-.monitor-facts dd {
-  margin: 4px 0 0;
-  overflow-wrap: anywhere;
-}
-#setup-connection-info {
   margin-top: 12px;
   overflow-wrap: anywhere;
 }
-[aria-busy="true"] {
-  cursor: progress;
+#setup-test-result p {
+  margin-bottom: 4px;
 }
-[hidden] {
-  display: none !important;
+#setup-status:not(:empty) {
+  margin-top: 12px;
+  padding: 10px 14px;
+  border-radius: 6px;
+  background: var(--amber-wash);
+  color: var(--amber-ink);
 }
-@media (max-width: 700px) {
-  header {
-    padding: 12px 16px;
-    gap: 12px;
+#setup-open-advanced {
+  margin-top: 16px;
+}
+
+/* Advanced: the editor is the work, and what it refers to sits alongside. */
+.advanced-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(320px, 1fr);
+  align-items: start;
+  gap: 16px;
+}
+.advanced-editor {
+  min-width: 0;
+}
+.editor-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+.editor-head label {
+  margin: 0;
+}
+.advanced-editor > .help {
+  margin: 8px 0;
+}
+#validation:not(:empty) {
+  margin-top: 8px;
+  font-size: 0.875rem;
+}
+#diff-content:empty {
+  display: none;
+}
+.advanced-side {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+.side-group {
+  padding: 12px 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+.side-group h2 {
+  margin: 0 0 8px;
+  font-size: 1rem;
+}
+.side-group .help,
+.side-group p {
+  font-size: 0.8125rem;
+}
+.side-group select {
+  width: 100%;
+}
+#model-form,
+#source-form,
+#policy-form {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line-soft);
+}
+
+/* Runtime */
+.gate-state {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.gate-state .lamp {
+  width: 18px;
+  height: 18px;
+  border-width: 3px;
+}
+.section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 24px 0 8px;
+}
+
+@media (max-width: 1099px) {
+  /* Stacked, the open event comes first: it is what the operator just asked for. */
+  .activity-layout:has(#event-detail:not([hidden])) {
+    grid-template-columns: minmax(0, 1fr);
   }
-  header nav {
-    order: 3;
-    width: 100%;
-    margin: 0;
-    gap: 12px;
-    font-size: 0.875rem;
+  #event-detail {
+    position: static;
+    order: -1;
+    max-height: none;
   }
-  header nav a {
-    display: flex;
-    align-items: center;
-    min-height: 44px;
+  .advanced-layout,
+  .review-layout {
+    grid-template-columns: minmax(0, 1fr);
   }
-  main {
-    padding: 20px 16px;
+}
+@media (max-width: 760px) {
+  #login {
+    margin-top: 16px;
   }
-  .fields {
-    grid-template-columns: 1fr;
-  }
+  .fields,
+  .setup-review,
   .monitor-facts {
-    grid-template-columns: 1fr;
-    gap: 12px;
-  }
-  .monitor-record .heading {
-    display: block;
-  }
-  .monitor-record .heading p {
-    margin-top: 8px;
-  }
-  .setup-steps {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    font-size: 0.875rem;
-    margin-bottom: 24px;
-  }
-  .setup-steps li {
-    padding: 10px 6px;
-  }
-  .setup-review {
-    grid-template-columns: 1fr;
-    gap: 20px;
-  }
-  .setup-test {
-    padding: 16px;
+    grid-template-columns: minmax(0, 1fr);
   }
   .setup-summary {
-    grid-template-columns: 1fr;
-    gap: 4px;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
   }
   .setup-summary dd {
-    margin-bottom: 12px;
-  }
-  h1 {
-    font-size: 2rem;
+    margin-bottom: 8px;
   }
   .row > * {
     min-width: 0;
@@ -495,16 +633,45 @@ footer {
   .row input {
     min-width: 100%;
   }
-  button {
+  .config-actions .row {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+  }
+  .monitor-head > .row {
+    width: 100%;
+  }
+  .setup-steps {
+    margin-bottom: 18px;
+  }
+  /* Phone records: time and outcome on the first line, then the message whole. */
+  .records .cell-time {
+    width: auto;
+  }
+  .records td:last-child {
+    grid-area: 1 / 2;
+    width: auto;
+  }
+  .records .cell-subject,
+  .records .cell-message,
+  .records .cell-event {
+    grid-column: 1 / -1;
     white-space: normal;
   }
-  pre {
-    padding: 12px;
+  .records .cell-source {
+    display: none;
   }
-  .heading {
-    align-items: start;
+  .cell-event .cell-message {
+    -webkit-line-clamp: 3;
+    line-clamp: 3;
   }
-  #notice {
-    overflow-wrap: anywhere;
+  .row.review-open a {
+    width: 100%;
   }
+}
+
+/* The empty audit message sits where the full-width table will appear, so it
+   must not inherit the reading measure that .help applies to prose. */
+#audit .panel {
+  max-width: none;
 }

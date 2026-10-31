@@ -14,6 +14,7 @@ function monitorContract(doc, source) {
   };
 }
 function configView(view) {
+  state.configView = view;
   $("current-config").hidden = view !== "current";
   $("setup-guide").hidden = view !== "guide";
   $("advanced-config").hidden = view !== "advanced";
@@ -30,6 +31,7 @@ function configView(view) {
     view === "current"
       ? "The monitoring services in the active revision. Draft changes are not running."
       : "Save monitor edits as a draft, then Apply to run them with the selected notification mode. Connection saves take effect immediately.";
+  renderConfigRevision();
 }
 function renderMonitors() {
   const doc = state.config.document;
@@ -59,13 +61,30 @@ function renderMonitors() {
         ? "Shadow · no messages sent"
         : "Ignore only";
     const article = el("article"),
-      heading = el("div");
-    article.className = "monitor-record";
-    heading.className = "heading";
-    heading.append(
-      el("h2", source.name),
-      el("p", `${source.paused ? "Paused" : "Enabled"} · ${mode}`),
+      heading = el("div"),
+      title = el("div"),
+      status = el("p");
+    article.className = "monitor-record panel";
+    heading.className = "monitor-head";
+    status.className = "monitor-status";
+    status.append(
+      Signal.lamp(
+        source.paused
+          ? "off"
+          : live
+            ? state.config.shadow_override
+              ? "stop"
+              : "clear"
+            : effects.length
+              ? "hold"
+              : "off",
+      ),
+      document.createTextNode(
+        `${source.paused ? "Paused" : "Enabled"} · ${mode}`,
+      ),
     );
+    title.append(el("h2", source.name), status);
+    heading.append(title);
     article.append(heading);
     const facts = el("dl");
     facts.className = "monitor-facts";
@@ -106,7 +125,9 @@ function renderMonitors() {
       : source.type === "systemd-journal"
         ? "Uses shared legacy rules. Edit monitor creates independent rules for this source."
         : "Uses shared legacy rules. Source-local contracts can be set in Advanced YAML.";
-    article.append(el("p", ownership));
+    const ownershipNote = el("p", ownership);
+    ownershipNote.className = "help";
+    article.append(ownershipNote);
     for (const ref of new Set(
       effects
         .filter((t) => t.notify?.via === "discord")
@@ -165,21 +186,24 @@ function renderMonitors() {
         try {
           await fn();
         } catch (error) {
-          notice(error.message);
+          fail(error.message);
         } finally {
           button.disabled = false;
         }
       });
       buttons.append(button);
     }
-    article.append(buttons);
+    heading.append(buttons);
     $("active-monitors").append(article);
   }
   if (doc.filter?.length)
     $("active-monitors").append(
-      el(
-        "p",
-        `${doc.filter.length} shared pre-model filters apply to all monitors. See Advanced configuration.`,
+      Object.assign(
+        el(
+          "p",
+          `${Signal.plural(doc.filter.length, "shared pre-model filter")} ${doc.filter.length === 1 ? "applies" : "apply"} to all monitors. See Advanced configuration.`,
+        ),
+        { className: "help" },
       ),
     );
 }

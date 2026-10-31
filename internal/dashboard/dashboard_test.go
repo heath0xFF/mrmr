@@ -54,7 +54,7 @@ func TestDashboardLocalReadOnlyAndRedaction(t *testing.T) {
 	h, rt := testDashboard(t)
 	rt.StartPoll("journal")
 	rt.FinishPoll("journal", nil)
-	for _, path := range []string{"/dashboard/", "/dashboard/dashboard.js", "/dashboard/dashboard.css", "/dashboard/api/overview", "/dashboard/api/events", "/dashboard/api/events?view=pending", "/dashboard/api/event?id=evt_test"} {
+	for _, path := range []string{"/dashboard/", "/dashboard/dashboard.js", "/dashboard/dashboard.css", "/dashboard/signal.css", "/dashboard/signal.js", "/dashboard/api/overview", "/dashboard/api/events", "/dashboard/api/events?view=pending", "/dashboard/api/event?id=evt_test"} {
 		w := request(h, "GET", path)
 		if w.Code != 200 {
 			t.Fatalf("%s: %d %s", path, w.Code, w.Body.String())

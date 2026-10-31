@@ -24,7 +24,7 @@ import (
 	"github.com/heath0xff/mrmr/internal/runtime"
 )
 
-//go:embed index.html dashboard.css dashboard.js manage.html manage.css manage.js manage-setup.js manage-monitors.js
+//go:embed index.html dashboard.css dashboard.js signal.css signal.js manage.html manage.css manage.js manage-setup.js manage-monitors.js
 var assets embed.FS
 
 type sourceView struct {
@@ -238,6 +238,10 @@ func New(rt *runtime.Runtime, cfg *config.Config) http.Handler {
 				name, kind = "dashboard.css", "text/css; charset=utf-8"
 			case "/dashboard/dashboard.js":
 				name, kind = "dashboard.js", "text/javascript; charset=utf-8"
+			case "/dashboard/signal.css":
+				name, kind = "signal.css", "text/css; charset=utf-8"
+			case "/dashboard/signal.js":
+				name, kind = "signal.js", "text/javascript; charset=utf-8"
 			default:
 				http.NotFound(w, r)
 				return

@@ -21,9 +21,16 @@ const state = {
 const json = (value) => JSON.stringify(value, null, 2);
 const stamp = (value) =>
   value ? new Date(value).toLocaleString() : "Not observed";
-function notice(text) {
+// Notices float over the page, so "Draft saved" is visible from the bottom of a
+// long editor. Failures persist until dismissed or replaced. Routine results
+// clear on navigation so they cannot be misread as describing the next page.
+function notice(text, tone = "info") {
   $("notice").textContent = text;
+  $("notice-bar").dataset.tone = tone;
+  $("notice-bar").hidden = !text;
 }
+const fail = (text) => notice(text, "error");
+$("notice-close").addEventListener("click", () => notice(""));
 async function api(path, body) {
   const session = state.session;
   const controller = new AbortController(),
@@ -69,7 +76,7 @@ function action(id, fn) {
     try {
       await fn();
     } catch (err) {
-      notice(
+      fail(
         err.name === "AbortError"
           ? "Request timed out. Refresh runtime state before retrying a change."
           : err.message,
@@ -88,6 +95,7 @@ function lock() {
   $("app").hidden = true;
   $("login").hidden = false;
   $("logout").hidden = true;
+  document.body.classList.add("locked");
   $("token").value = "";
   $("yaml").value = "";
   $("review-id").value = "";
@@ -121,8 +129,16 @@ function lock() {
     "model-health",
     "overview-content",
     "active-monitors",
+    // Added with the Overview and Review redesign. Both hold event text, so they
+    // must be cleared with the rest of the private content on Lock.
+    "attention",
+    "review-queue",
+    "category-options",
   ])
     $(id).replaceChildren();
+  $("overview-title").textContent = "Overview";
+  $("overview-sentence").textContent = "";
+  $("freshness").textContent = "";
   resetSetup();
   notice("Management locked.");
 }
@@ -144,8 +160,27 @@ function page() {
     else a.removeAttribute("aria-current");
   }
   document.title = `mrmr · ${name}`;
+  if ($("notice-bar").dataset.tone !== "error") notice("");
 }
-window.addEventListener("hashchange", page);
+// Reports used to stay blank until a Refresh click, which read as "nothing here".
+// Load each page's records on arrival instead.
+function loadPage() {
+  if (!state.token) return;
+  const name = location.hash.slice(1);
+  const load =
+    name === "runtime"
+      ? audit
+      : name === "review"
+        ? () => Promise.all([reviewQueue(), evaluations()])
+        : name === "overview" || !name
+          ? overview
+          : null;
+  load?.().catch((e) => fail(e.message));
+}
+window.addEventListener("hashchange", () => {
+  page();
+  loadPage();
+});
 page();
 $("login-form").addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -157,13 +192,15 @@ $("login-form").addEventListener("submit", async (e) => {
     $("login").hidden = true;
     $("app").hidden = false;
     $("logout").hidden = false;
+    document.body.classList.remove("locked");
     await overview();
     await events();
     const id = new URLSearchParams(location.search).get("event");
     if (id) await detail(id);
-    notice("Operator access active. Changes are recorded.");
+    notice("");
+    loadPage();
   } catch (err) {
-    notice(err.message);
+    fail(err.message);
   }
 });
 $("logout").addEventListener("click", lock);
@@ -173,103 +210,197 @@ function record(title, text) {
   n.append(el("h3", title), el("p", text));
   return n;
 }
+function table(headers, className = "") {
+  const wrap = el("div"),
+    t = el("table"),
+    head = el("thead"),
+    row = el("tr"),
+    body = el("tbody");
+  wrap.className = "table-wrap";
+  t.className = className;
+  for (const h of headers) {
+    const th = el("th", h);
+    th.scope = "col";
+    row.append(th);
+  }
+  head.append(row);
+  t.append(head, body);
+  wrap.append(t);
+  return { wrap, body };
+}
+function cell(text, className) {
+  const n = el("td", text);
+  if (className) n.className = className;
+  return n;
+}
+// Opening an event from any page lands on Activity with its detail open, so Back
+// returns to where the operator was reading.
+function eventLink(e, label) {
+  const a = el("a", label);
+  const p = new URLSearchParams(location.search);
+  p.set("event", e.id);
+  a.href = `?${p}#activity`;
+  a.dataset.keepId = `event:${e.id}`;
+  a.addEventListener("click", (evt) => {
+    if (evt.ctrlKey || evt.metaKey || evt.shiftKey) return;
+    evt.preventDefault();
+    history.pushState(null, "", a.href);
+    page();
+    detail(e.id).catch((err) => fail(err.message));
+  });
+  return a;
+}
+function showView(view, query = "") {
+  $("view").value = view;
+  $("query").value = query;
+  state.before = "";
+  state.offset = 0;
+  location.hash = "activity";
+  saveSearch();
+  events().catch((e) => fail(e.message));
+}
+function renderAttention(rows) {
+  const flagged = rows.filter(Signal.needsAttention).slice(0, 6);
+  Signal.keepFocus(() => {
+    $("attention").replaceChildren();
+    if (!flagged.length) {
+      const quiet = el("p", "Nothing in the latest events needs attention.");
+      quiet.className = "panel help";
+      $("attention").append(quiet);
+      return;
+    }
+    const { wrap, body } = table(
+      ["Received", "Service", "Message", "Outcome"],
+      "records attention-table",
+    );
+    for (const e of flagged) {
+      const row = el("tr"),
+        subject = cell(undefined, "cell-subject"),
+        tag = cell();
+      subject.append(eventLink(e, e.subject || e.type));
+      tag.append(Signal.outcomeTag(e));
+      row.append(
+        cell(Signal.clock(e.ingested_at), "cell-time"),
+        subject,
+        cell(e.message, "cell-message"),
+        tag,
+      );
+      body.append(row);
+    }
+    $("attention").append(wrap);
+  });
+}
+function renderStored(s) {
+  const line = el("p");
+  line.className = "stored-line";
+  for (const [count, label, view] of [
+    [s.events, "stored events", "all"],
+    [s.unlabeled, "unlabeled", "unlabeled"],
+    [s.pending, "unfinished intents", "pending"],
+  ]) {
+    const a = el("a");
+    a.append(el("strong", count), document.createTextNode(` ${label}`));
+    a.href = `?view=${view}#activity`;
+    a.addEventListener("click", (e) => {
+      if (e.ctrlKey || e.metaKey || e.shiftKey) return;
+      e.preventDefault();
+      showView(view);
+    });
+    line.append(a);
+  }
+  const errors = el("a", "Inspect errors");
+  errors.href = "?view=errors#activity";
+  errors.addEventListener("click", (e) => {
+    if (e.ctrlKey || e.metaKey || e.shiftKey) return;
+    e.preventDefault();
+    showView("errors");
+  });
+  line.append(errors);
+  $("overview-content").replaceChildren(line);
+}
+function renderModels(s) {
+  $("model-health").replaceChildren();
+  if (!s.models.length) {
+    const none = el("p", "No model decisions recorded yet.");
+    none.className = "panel help";
+    $("model-health").append(none);
+    return;
+  }
+  const { wrap, body } = table(
+    ["Interpreter", "Model", "Successful", "Median", "Errors", "Latest decision"],
+    "models-table",
+  );
+  for (const m of s.models) {
+    const row = el("tr");
+    row.append(
+      cell(m.interpreter, "cell-subject"),
+      cell(m.model),
+      cell(`${m.successes} / ${m.count}`),
+      cell(m.median_ms == null ? "Not measured" : `${m.median_ms} ms`),
+      cell(m.errors),
+      cell(stamp(m.last_at)),
+    );
+    body.append(row);
+  }
+  $("model-health").append(wrap);
+}
+function renderGate(blocked) {
+  // Off is a configuration fact, not evidence of health, so it is never green.
+  $("gate-lamp").dataset.state = blocked ? "stop" : "set";
+  $("gate-title").textContent = blocked
+    ? "Safety gate on: all effects blocked"
+    : "Safety gate off: effects follow their rules";
+  $("shadow").disabled = blocked;
+}
 async function overview() {
   clearTimeout(state.timer);
   if (!state.token) return;
   try {
     if (!state.config || state.config.setup) {
-      $("overview-content").replaceChildren(
-        record(
-          "Setup required",
-          "Open Configure to set a model endpoint and source. Collection is disabled.",
-        ),
-      );
+      $("overview-title").textContent = "Setup required";
+      $("overview-sentence").textContent =
+        "Collection is disabled until a valid configuration is activated.";
+      const go = el("a", "Open Configure to set a model endpoint and source");
+      go.href = "#configure";
+      $("overview-content").replaceChildren(go);
       return;
     }
     const data = await api("/dashboard/api/overview");
+    const reading = Signal.assess(data);
     $("host").textContent = data.hostname;
-    $("freshness").textContent =
-      `Runtime answered ${stamp(data.at)}. Source evidence resets when its runtime revision changes.`;
-    const s = data.summary;
-    $("overview-content").replaceChildren(
-      record(
-        "Stored evidence",
-        `${s.events} events · ${s.unlabeled} unlabeled · ${s.pending} unfinished execution intents`,
-      ),
-    );
-    const effects = data.policy.filter((r) => r.outcome !== "ignore"),
-      live = effects.filter((r) => !r.shadow).length;
-    $("overview-content").append(
-      record(
-        "Effect boundary",
-        data.effects_blocked
-          ? "Operator safety gate: effects blocked."
-          : live
-            ? `${live} configured live effect rule(s).`
-            : "Configured effects are shadowed or ignored.",
-      ),
-    );
-    const links = el("p");
-    for (const [label, view] of [
-      ["Inspect errors", "errors"],
-      ["Review unlabeled events", "unlabeled"],
-      ["Inspect unfinished intents", "pending"],
-    ]) {
-      const a = el("a", label);
-      a.href = `?view=${view}#activity`;
-      a.addEventListener("click", (e) => {
-        if (e.ctrlKey || e.metaKey || e.shiftKey) return;
-        e.preventDefault();
-        $("view").value = view;
-        $("query").value = "";
-        state.before = "";
-        state.offset = 0;
-        location.hash = "activity";
-        saveSearch();
-        events().catch((e) => notice(e.message));
-      });
-      links.append(a, document.createTextNode(" · "));
-    }
-    $("overview-content").append(links);
-    $("source-health").replaceChildren();
-    for (const source of data.sources) {
-      const h = source.health,
-        finished = new Date(h.finished_at),
-        limit = Math.max(30000, source.every_ms * 3);
-      const status = source.paused
-        ? "Paused; cursor retained"
-        : h.failed
-          ? "Last poll failed"
-          : h.running
-            ? "Poll in progress"
-            : finished.getFullYear() > 1
-              ? new Date(data.at) - finished > limit
-                ? "No recent completed poll"
-                : "Last poll completed; an empty poll is not a failure"
-              : "First poll not observed";
-      $("source-health").append(
-        record(
-          source.name,
-          `${status}. ${source.type}; ${source.every_ms / 1000}s interval.`,
-        ),
-      );
-    }
+    $("overview-title").textContent = reading.title;
+    $("overview-title").dataset.tone = reading.tone;
+    $("overview-sentence").textContent = reading.sentence;
+    $("freshness").textContent = `Runtime answered ${stamp(data.at)}`;
+    $("freshness").title =
+      "Source evidence resets when the runtime revision changes.";
+    Signal.renderTracks($("source-health"), reading.tracks, {
+      href: (name) => `?q=${encodeURIComponent(name)}#activity`,
+      go: (name) => showView("all", name),
+    });
     if (!data.sources.length)
       $("source-health").append(
         el("p", "No pull sources configured. HTTP ingress remains available."),
       );
-    $("model-health").replaceChildren();
-    for (const m of s.models)
-      $("model-health").append(
-        record(
-          m.interpreter,
-          `${m.model} · ${m.successes}/${m.count} successful · median ${m.median_ms ?? "not measured"} ms · ${m.errors} errors. Latest decision ${stamp(m.last_at)}.`,
-        ),
-      );
+    renderStored(data.summary);
+    renderModels(data.summary);
+    renderGate(data.effects_blocked);
+    // Attention is drawn from the newest page of events and only fetched while
+    // Overview is on screen, so the ten-second poll stays cheap elsewhere.
+    if (["", "#overview"].includes(location.hash)) {
+      const latest = await api("/dashboard/api/events?view=all&offset=0");
+      renderAttention(latest.events);
+    }
   } catch (err) {
-    $("freshness").textContent =
-      "Status refresh failed. Displayed evidence may be stale.";
-    notice(err.message);
+    // Lock rejects in-flight requests on purpose. That is not a runtime failure,
+    // and writing here would repopulate a page Lock just cleared.
+    if (!state.token) return;
+    $("overview-title").textContent = "The runtime is not answering";
+    $("overview-title").dataset.tone = "stop";
+    $("overview-sentence").textContent =
+      "These tracks show the last evidence received and may be stale.";
+    $("freshness").textContent = "Status refresh failed.";
+    fail(err.message);
   } finally {
     if (state.token && !document.hidden)
       state.timer = setTimeout(overview, 10000);
@@ -330,42 +461,58 @@ async function events() {
   const currentURL = new URL(location.href);
   currentURL.searchParams.set("before", state.before);
   history.replaceState(null, "", currentURL);
-  $("events").replaceChildren();
   state.more = data.more;
+  const { wrap, body } = table(
+    ["Received", "Source", "Event", "Outcome"],
+    "records events-table",
+  );
+  const selected = new URLSearchParams(location.search).get("event");
   for (const e of data.events) {
-    const n = record(
-      e.subject || e.type,
-      `${e.source} · ${e.type} · ${stamp(e.ingested_at)} · ${e.outcome || "No execution recorded"} / ${e.execution_status || "unknown"}`,
+    const row = el("tr"),
+      main = cell(undefined, "cell-event"),
+      tag = cell();
+    row.dataset.eventId = e.id;
+    if (e.id === selected) row.className = "selected";
+    const a = eventLink(e, e.subject || e.type);
+    a.className = "cell-subject";
+    const message = el("span", e.message);
+    message.className = "cell-message";
+    main.append(a, message);
+    tag.append(Signal.outcomeTag(e));
+    row.append(
+      cell(Signal.clock(e.ingested_at), "cell-time"),
+      cell(`${e.source} · ${e.type}`, "cell-source"),
+      main,
+      tag,
     );
-    const a = el("a", "Inspect event");
-    const p = new URLSearchParams(location.search);
-    p.set("event", e.id);
-    a.href = `?${p}#activity`;
-    a.addEventListener("click", (evt) => {
-      if (evt.ctrlKey || evt.metaKey || evt.shiftKey) return;
-      evt.preventDefault();
-      history.pushState(null, "", a.href);
-      detail(e.id).catch((e) => notice(e.message));
-    });
-    n.append(el("p", e.message), a);
-    $("events").append(n);
+    body.append(row);
   }
-  if (!data.events.length)
-    $("events").append(
-      el("p", "No matching events. Check source scope and poll evidence."),
+  $("events").replaceChildren(wrap);
+  if (!data.events.length) {
+    const none = cell(
+      "No matching events. Check source scope and poll evidence.",
+      "empty",
     );
+    none.colSpan = 4;
+    const row = el("tr");
+    row.append(none);
+    body.append(row);
+  }
   $("previous").disabled = state.offset === 0;
   $("next").disabled = !data.more || state.offset >= 100000;
   $("page-info").textContent = data.events.length
     ? `${state.offset + 1}–${state.offset + data.events.length}`
     : "No results";
 }
+$("view").addEventListener("change", () =>
+  $("search").requestSubmit(),
+);
 $("search").addEventListener("submit", (e) => {
   e.preventDefault();
   state.before = "";
   state.offset = 0;
   saveSearch();
-  events().catch((e) => notice(e.message));
+  events().catch((e) => fail(e.message));
 });
 action("previous", async () => {
   state.offset = Math.max(0, state.offset - 50);
@@ -381,18 +528,11 @@ async function detail(id) {
   const generation = ++state.detailGeneration;
   const data = await api(`/dashboard/api/event?id=${encodeURIComponent(id)}`);
   if (generation !== state.detailGeneration || !state.token) return;
-  const root = $("event-detail");
+  const root = $("event-detail"),
+    e = data.event;
+  for (const row of document.querySelectorAll("#events tr[data-event-id]"))
+    row.classList.toggle("selected", row.dataset.eventId === id);
   root.hidden = false;
-  root.replaceChildren(el("h2", `Event ${id}`));
-  for (const x of data.executions || [])
-    root.append(
-      el(
-        "p",
-        x.status === "pending"
-          ? "Unfinished intent: the effect may or may not have occurred."
-          : `${x.outcome} · ${x.status}${x.status === "shadow" ? " · no effect performed" : ""}`,
-      ),
-    );
   const close = el("button", "Close event");
   close.id = "close-event";
   close.addEventListener("click", () => {
@@ -400,36 +540,66 @@ async function detail(id) {
     url.searchParams.delete("event");
     history.pushState(null, "", url);
     clearDetail();
+    for (const row of document.querySelectorAll("#events tr.selected"))
+      row.classList.remove("selected");
     document.querySelector("#events a")?.focus();
   });
-  root.append(close, document.createTextNode(" "));
   const review = el("button", "Review this event");
   review.id = "review-this-event";
+  review.className = "primary";
   review.addEventListener("click", () => {
     $("review-id").value = id;
     location.hash = "review";
-    loadReview().catch((e) => notice(e.message));
+    loadReview().catch((err) => fail(err.message));
   });
-  root.append(review);
-  const parent = data.event.provenance?.parent_event_id;
+  const head = el("div"),
+    tools = el("div");
+  head.className = "detail-head";
+  tools.className = "row";
+  tools.append(review, close);
+  const title = el("h2", e.subject || e.type);
+  head.append(title, tools);
+  const when = el("p", `${e.source} · ${e.type} · ${stamp(e.timestamp)}`);
+  when.className = "help";
+  root.replaceChildren(head, when);
+  // The track answers "how far did this event get?" before any detail does.
+  root.append(Signal.stageList(Signal.eventStages(data)));
+  if (typeof e.data?.message === "string") {
+    const message = el("p", e.data.message);
+    message.className = "detail-message";
+    root.append(message);
+  }
+  for (const x of data.executions || [])
+    if (x.status === "pending") {
+      const warn = el(
+        "p",
+        "Unfinished intent: the effect may or may not have occurred.",
+      );
+      warn.className = "warning";
+      root.append(warn);
+    } else if (x.error) {
+      const err = el("pre", x.error);
+      root.append(err);
+    }
+  for (const d of data.decisions || []) {
+    root.append(el("h3", `What ${d.interpreter} answered`));
+    if (d.result) root.append(Signal.answers(d.result));
+    else root.append(el("p", d.error || "No valid model result."));
+  }
+  const parent = e.provenance?.parent_event_id;
   for (const related of [parent, ...(data.child_event_ids || [])].filter(
     Boolean,
   )) {
     const p = el("p"),
-      a = el("a", `${related === parent ? "Parent" : "Child"}: ${related}`);
-    const params = new URLSearchParams(location.search);
-    params.set("event", related);
-    a.href = `?${params}#activity`;
-    a.addEventListener("click", (e) => {
-      if (e.ctrlKey || e.metaKey || e.shiftKey) return;
-      e.preventDefault();
-      history.pushState(null, "", a.href);
-      detail(related).catch((e) => notice(e.message));
-    });
-    p.append(a);
+      label = `${related === parent ? "Parent" : "Child"}: ${related}`;
+    p.append(eventLink({ id: related }, label));
     root.append(p);
   }
-  root.append(
+  // The server formats event_json before numbers enter JavaScript's float64, so
+  // this collapsed view is the exact record, including very large identifiers.
+  const raw = el("details");
+  raw.append(
+    el("summary", "Recorded data: normalized Event, decisions, executions, trace"),
     el("h3", "Normalized Event"),
     el("pre", data.event_json),
     el("h3", "Decisions and executions"),
@@ -437,22 +607,67 @@ async function detail(id) {
     el("h3", "Trace"),
     el("pre", json(data.trace || [])),
   );
-  root.focus();
-  root.scrollIntoView({ block: "start" });
+  root.append(raw);
+  root.focus({ preventScroll: true });
+  // Beside the list the pane is already in view; scrolling would lose the row
+  // the operator just chose. Stacked on a phone it must be brought to them.
+  if (matchMedia("(max-width: 1099px)").matches)
+    root.scrollIntoView({ block: "start" });
+  else root.scrollTop = 0;
 }
 window.addEventListener("popstate", () => {
   restoreSearch();
   page();
   if (state.token) {
-    events().catch((e) => notice(e.message));
+    events().catch((e) => fail(e.message));
     const id = new URLSearchParams(location.search).get("event");
-    if (id) detail(id).catch((e) => notice(e.message));
+    if (id) detail(id).catch((e) => fail(e.message));
     else {
       $("event-detail").hidden = true;
       state.detailGeneration++;
     }
   }
 });
+// A list of what is waiting, so labelling does not start with copying an ID.
+async function reviewQueue() {
+  const data = await api("/dashboard/api/events?view=unlabeled&offset=0");
+  const rows = data.events.slice(0, 8);
+  $("review-queue").replaceChildren();
+  if (!rows.length) {
+    const done = el("p", "Every stored event has a label.");
+    done.className = "panel help";
+    $("review-queue").append(done);
+    return;
+  }
+  const { wrap, body } = table(
+    ["Received", "Service", "Message", "Outcome"],
+    "records attention-table",
+  );
+  for (const e of rows) {
+    const row = el("tr"),
+      subject = cell(undefined, "cell-subject"),
+      tag = cell(),
+      a = el("a", e.subject || e.type);
+    a.href = "#review";
+    a.addEventListener("click", (evt) => {
+      evt.preventDefault();
+      $("review-id").value = e.id;
+      loadReview()
+        .then(() => $("review-evidence").focus())
+        .catch((err) => fail(err.message));
+    });
+    subject.append(a);
+    tag.append(Signal.outcomeTag(e));
+    row.append(
+      cell(Signal.clock(e.ingested_at), "cell-time"),
+      subject,
+      cell(e.message, "cell-message"),
+      tag,
+    );
+    body.append(row);
+  }
+  $("review-queue").append(wrap);
+}
 async function loadReview() {
   const id = $("review-id").value.trim();
   const [review, evidence] = await Promise.all([
@@ -460,11 +675,34 @@ async function loadReview() {
     api(`/dashboard/api/event?id=${encodeURIComponent(id)}`),
   ]);
   state.review = { id, ...review };
-  $("review-evidence").replaceChildren(
-    el("h2", evidence.event.subject || evidence.event.type),
-    el("pre", evidence.event_json),
+  // Evidence sits beside the form: the operator should not hold the event in
+  // memory while answering questions about it.
+  const panel = el("div");
+  panel.className = "panel";
+  panel.append(el("h2", evidence.event.subject || evidence.event.type));
+  panel.append(Signal.stageList(Signal.eventStages(evidence)));
+  if (typeof evidence.event.data?.message === "string") {
+    const message = el("p", evidence.event.data.message);
+    message.className = "detail-message";
+    panel.append(message);
+  }
+  for (const d of evidence.decisions || []) {
+    panel.append(el("h3", `What ${d.interpreter} answered`));
+    if (d.result) panel.append(Signal.answers(d.result));
+    else panel.append(el("p", d.error || "No valid model result."));
+  }
+  const raw = el("details");
+  raw.append(el("summary", "Normalized Event"), el("pre", evidence.event_json));
+  panel.append(raw);
+  $("review-evidence").replaceChildren(panel);
+  $("category-options").replaceChildren(
+    ...(review.categories || []).map((c) => {
+      const option = el("option");
+      option.value = c;
+      return option;
+    }),
   );
-  $("review-evidence").append(
+  panel.append(
     el(
       "p",
       review.contract_supported
@@ -509,9 +747,9 @@ $("review-form").addEventListener("submit", async (e) => {
       outcome: $("expected-outcome").value,
     });
     notice("Review saved. No event was rerun.");
-    await loadReview();
+    await Promise.all([loadReview(), reviewQueue()]);
   } catch (err) {
-    notice(err.message);
+    fail(err.message);
   }
 });
 function template(bootstrap) {
@@ -521,9 +759,20 @@ function renderConfigRevision() {
   const data = state.config;
   if (!data) return;
   const pending = data.draft.yaml && data.draft.yaml !== data.active;
+  const idle = !state.dirty && !pending;
   $("config-state").textContent =
     `${state.dirty ? "Unsaved changes" : pending ? "Saved draft · Not applied" : data.setup ? "Not configured" : "Active · No pending changes"}${pending && data.draft.base !== data.revision ? " · Based on an older revision; reload and review before applying" : ""}`;
   $("config-state").title = `Active revision: ${data.revision}`;
+  // Violet is reserved for work that is not running; nothing else uses it.
+  $("config-lamp").dataset.state = idle ? "clear" : "draft";
+  $(
+    "config-state",
+  ).parentElement.parentElement.classList.toggle("is-draft", !idle);
+  // With nothing to save on the monitor list, Save and Apply are noise. Forms
+  // always keep them: the guide can be saved before any field has been changed.
+  $("config-buttons").hidden = idle && state.configView === "current";
+  $("save-draft").classList.toggle("primary", !!state.dirty);
+  $("review-config").classList.toggle("primary", !state.dirty && !!pending);
 }
 function renderConnections() {
   $("connections").replaceChildren();
@@ -567,7 +816,7 @@ async function loadConfig() {
           "Revision loaded into editor. It is not active. Validate and save before applying.",
         );
       } catch (err) {
-        notice(err.message);
+        fail(err.message);
       }
     });
     n.append(b);
@@ -805,7 +1054,7 @@ async function updateForms() {
             ];
           await setDocument(current);
         } catch (error) {
-          notice(error.message);
+          fail(error.message);
         }
       });
       n.append(button, document.createTextNode(" "));
@@ -852,7 +1101,7 @@ async function updateForms() {
         target.paused = !target.paused;
         await setDocument(current);
       } catch (e) {
-        notice(e.message);
+        fail(e.message);
       }
     });
     const remove = el("button", "Remove from draft");
@@ -870,7 +1119,7 @@ async function updateForms() {
         if (current.monitors) delete current.monitors[source.name];
         await setDocument(current);
       } catch (e) {
-        notice(e.message);
+        fail(e.message);
       }
     });
     n.append(toggle, document.createTextNode(" "), remove);
@@ -909,7 +1158,7 @@ $("model-form").addEventListener("submit", async (e) => {
     doc.models = { ...doc.models, [$("model-name").value]: model };
     await setDocument(doc);
   } catch (err) {
-    notice(err.message);
+    fail(err.message);
   }
 });
 $("source-form").addEventListener("submit", async (e) => {
@@ -949,7 +1198,7 @@ $("source-form").addEventListener("submit", async (e) => {
     doc.sources.push(source);
     await setDocument(doc);
   } catch (err) {
-    notice(err.message);
+    fail(err.message);
   }
 });
 $("interpreter-model").addEventListener("change", async () => {
@@ -959,7 +1208,7 @@ $("interpreter-model").addEventListener("change", async () => {
     doc.interpret.model = name;
     await setDocument(doc);
   } catch (error) {
-    notice(error.message);
+    fail(error.message);
   }
 });
 action("load-active", async () => {
@@ -1008,7 +1257,7 @@ $("policy-form").addEventListener("submit", async (event) => {
     doc.policy.push({ if: { [$("rule-field").value]: value }, then });
     await setDocument(doc);
   } catch (error) {
-    notice(error.message);
+    fail(error.message);
   }
 });
 action("shadow", async () => {
@@ -1027,13 +1276,28 @@ action("shadow", async () => {
 async function audit() {
   const rows = await api("/manage/api/audit");
   $("audit").replaceChildren();
-  for (const row of rows)
-    $("audit").append(
-      record(
-        `${row.operation} · ${row.result}`,
-        `${stamp(row.at)} · ${row.actor} · ${row.target}`,
-      ),
+  if (!rows.length) {
+    const none = el("p", "No operator changes recorded yet.");
+    none.className = "panel help";
+    $("audit").append(none);
+    return;
+  }
+  const { wrap, body } = table(
+    ["When", "Operation", "Result", "Actor", "Target"],
+    "audit-table",
+  );
+  for (const row of rows) {
+    const line = el("tr");
+    line.append(
+      cell(stamp(row.at), "cell-time"),
+      cell(row.operation, "cell-subject"),
+      cell(row.result),
+      cell(row.actor),
+      cell(row.target),
     );
+    body.append(line);
+  }
+  $("audit").append(wrap);
 }
 action("refresh-audit", audit);
 async function evaluations() {

@@ -5,25 +5,26 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="color-scheme" content="light">
   <title>mrmr · Activity</title>
+  <link rel="stylesheet" href="/dashboard/signal.css">
   <link rel="stylesheet" href="/dashboard/dashboard.css">
+  <script src="/dashboard/signal.js" defer></script>
   <script src="/dashboard/dashboard.js" defer></script>
 </head>
 <body>
   <a class="skip" href="#activity">Skip to events</a>
-  <header class="masthead">
-    <div class="identity"><a class="brand" href="/dashboard/">mrmr</a><span id="host-name" class="host-name">Connecting to runtime</span></div>
+  <header class="topbar">
+    <a class="brand" href="/dashboard/">mrmr</a><span id="host-name" class="host">Connecting to runtime</span>
     <nav aria-label="Dashboard sections"><a href="#activity">Activity</a><a href="#latency">Latency</a><a href="#sources-title">Sources</a><a href="#configuration-title">Configuration</a></nav>
     <span class="readonly">Read-only</span>
   </header>
   <main>
     <div class="page-heading">
-      <div><h1>Activity</h1><p>Source events, model judgments, and the outcomes they selected.</p></div>
-      <button id="refresh" class="refresh-button" type="button"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20 7v5h-5M4 17v-5h5M5.2 7a8 8 0 0 1 13.6-1L20 8M4 16l1.2 2A8 8 0 0 0 18.8 17"/></svg>Refresh now</button>
+      <div><h1 id="summary-title" class="summary-title">Checking the runtime</h1><p id="summary-sentence">Source events, model judgments, and the outcomes they selected.</p></div>
+      <div class="page-tools"><p id="connection" class="connection" role="status">Connecting to the runtime…</p><button id="refresh" class="refresh-button" type="button">Refresh now</button></div>
     </div>
-    <div id="connection" class="connection" role="status">Connecting to the runtime…</div>
     <noscript><p class="warning">JavaScript is required to read live runtime data. Use <code>mrmr events</code> or <code>mrmr inspect</code> from the terminal instead.</p></noscript>
+    <div id="tracks" class="tracks"></div>
     <div id="totals" class="totals">Waiting for stored event counts.</div>
-    <p id="source-status" class="source-status">Waiting for source-poll evidence.</p>
     <div class="workspace">
       <div class="primary">
         <section id="latency" class="latency-section" aria-labelledby="latency-title">

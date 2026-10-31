@@ -259,9 +259,13 @@ function setupStep(step, focus = true) {
   for (const fieldset of document.querySelectorAll("[data-setup-step]"))
     fieldset.hidden = Number(fieldset.dataset.setupStep) !== step;
   for (const marker of document.querySelectorAll("[data-setup-marker]")) {
-    if (Number(marker.dataset.setupMarker) === step)
-      marker.setAttribute("aria-current", "step");
+    const n = Number(marker.dataset.setupMarker);
+    if (n === step) marker.setAttribute("aria-current", "step");
     else marker.removeAttribute("aria-current");
+    // Passed steps show "set" rather than green: they hold entered values, and
+    // nothing has been tested until the last step.
+    marker.dataset.state = n === step ? "draft" : n < step ? "set" : "off";
+    marker.querySelector(".lamp").dataset.state = marker.dataset.state;
   }
   if (focus) {
     const legend = document.querySelector(`[data-setup-step="${step}"] legend`);

@@ -17,6 +17,10 @@ func ManagementAsset(w http.ResponseWriter, r *http.Request) {
 		name, kind = "manage-monitors.js", "text/javascript; charset=utf-8"
 	case "/manage/manage.css":
 		name, kind = "manage.css", "text/css; charset=utf-8"
+	case "/manage/signal.css":
+		name, kind = "signal.css", "text/css; charset=utf-8"
+	case "/manage/signal.js":
+		name, kind = "signal.js", "text/javascript; charset=utf-8"
 	default:
 		http.NotFound(w, r)
 		return

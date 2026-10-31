@@ -281,7 +281,7 @@ func (m *manager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if r.Method == "GET" && (r.URL.Path == "/manage/" || r.URL.Path == "/manage/manage.js" || r.URL.Path == "/manage/manage-setup.js" || r.URL.Path == "/manage/manage-monitors.js" || r.URL.Path == "/manage/manage.css") {
+	if r.Method == "GET" && (r.URL.Path == "/manage/" || r.URL.Path == "/manage/manage.js" || r.URL.Path == "/manage/manage-setup.js" || r.URL.Path == "/manage/manage-monitors.js" || r.URL.Path == "/manage/manage.css" || r.URL.Path == "/manage/signal.css" || r.URL.Path == "/manage/signal.js") {
 		dashboard.ManagementAsset(w, r)
 		return
 	}

@@ -1,0 +1,632 @@
+/* Signal Box: the visual system shared by /dashboard/ and /manage/.
+
+   Colour is a state vocabulary, not decoration. Each lamp means one thing:
+     clear    green       the latest record for this stage succeeded
+     caution  amber       look at this
+     hold     amber       deliberately held back (shadow)
+     stop     red         the latest record failed, or effects are blocked
+     set      lunar white configured, which is not evidence of anything
+     off      grey        dark: paused, ignored, or nothing recorded
+   Violet is reserved for "draft, not running" and is used for nothing else.
+   Lamps always sit beside text, so no state depends on colour perception. */
+:root {
+  --graphite: #20242a;
+  --graphite-soft: #343a42;
+  --on-graphite: #d9d5c8;
+  --ground: #efeadd;
+  --surface: #f8f5ec;
+  --raised: #fffdf6;
+  --line: #d4cebc;
+  --line-soft: #e4dfcf;
+  --ink: #20242a;
+  --muted: #565a58;
+  --link: #24486b;
+  --clear: #2c7a4b;
+  --clear-ink: #1f5c38;
+  --amber: #e0a526;
+  --amber-ink: #6f4e00;
+  --amber-wash: #f7ead0;
+  --stop: #c8321f;
+  --stop-ink: #a12615;
+  --stop-wash: #f8e2dc;
+  --lunar: #fffdf6;
+  --dark-lamp: #bdb8a8;
+  --draft: #5b3da8;
+  --draft-wash: #ebe5f6;
+  --white: #fff;
+  --control-line: #a8a392;
+  --rail-line: #6d7077;
+  color-scheme: light;
+  font:
+    15px/1.5 system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
+  color: var(--ink);
+  background: var(--ground);
+  font-variant-numeric: tabular-nums;
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  background: var(--ground);
+}
+[hidden] {
+  display: none !important;
+}
+a {
+  color: var(--link);
+  text-underline-offset: 3px;
+}
+a:hover {
+  color: var(--ink);
+}
+::selection {
+  background: var(--amber);
+  color: var(--graphite);
+}
+:focus-visible {
+  outline: 2px solid var(--graphite);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+.topbar :focus-visible {
+  outline-color: var(--amber);
+}
+h1,
+h2,
+h3 {
+  margin: 0;
+  line-height: 1.2;
+  text-wrap: balance;
+}
+h1 {
+  font-size: 1.95rem;
+  font-weight: 680;
+  letter-spacing: -0.02em;
+}
+h2 {
+  font-size: 1.1rem;
+  font-weight: 650;
+  letter-spacing: -0.005em;
+}
+h3 {
+  font-size: 0.95rem;
+  font-weight: 650;
+}
+p {
+  margin: 0 0 12px;
+  max-width: 72ch;
+}
+code,
+pre,
+textarea {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+pre {
+  margin: 0;
+  max-height: 420px;
+  overflow: auto;
+  padding: 12px 14px;
+  border-radius: 6px;
+  background: var(--ground);
+  font-size: 0.8125rem;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  scrollbar-color: var(--dark-lamp) var(--ground);
+}
+.help,
+caption {
+  color: var(--muted);
+  font-size: 0.8125rem;
+}
+.sr-only,
+.skip:not(:focus) {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.skip:focus {
+  position: absolute;
+  z-index: 5;
+  top: 8px;
+  left: 8px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: var(--raised);
+}
+
+/* Controls stay native. Desktop targets are compact because this is a dense tool;
+   coarse pointers and phones get 44px below. */
+button,
+input,
+select,
+textarea {
+  max-width: 100%;
+  min-height: 36px;
+  padding: 6px 11px;
+  border: 1px solid var(--control-line);
+  border-radius: 6px;
+  background: var(--raised);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.875rem;
+  caret-color: var(--graphite);
+}
+input::placeholder,
+textarea::placeholder {
+  color: var(--muted);
+}
+input:hover,
+select:hover,
+textarea:hover {
+  border-color: var(--graphite);
+}
+button {
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background-color 120ms ease-out,
+    border-color 120ms ease-out;
+}
+button:hover {
+  border-color: var(--graphite);
+  background: var(--ground);
+}
+button:active {
+  background: var(--line);
+}
+button:disabled {
+  border-color: var(--line);
+  background: transparent;
+  color: var(--muted);
+  cursor: not-allowed;
+}
+button.primary,
+button.primary-button {
+  border-color: var(--graphite);
+  background: var(--graphite);
+  color: var(--white);
+}
+button.primary:hover,
+button.primary-button:hover {
+  background: var(--graphite-soft);
+}
+button.primary:disabled,
+button.primary-button:disabled {
+  border-color: var(--dark-lamp);
+  background: var(--dark-lamp);
+  color: var(--graphite);
+}
+button.danger {
+  border-color: var(--stop-ink);
+  color: var(--stop-ink);
+}
+button.danger:hover {
+  background: var(--stop-wash);
+}
+/* Secondary navigation that happens to need a button's semantics. */
+button.quiet {
+  border-color: transparent;
+  background: transparent;
+  color: var(--link);
+  font-weight: 500;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+button.quiet:hover {
+  background: var(--line-soft);
+  color: var(--ink);
+}
+details > summary {
+  cursor: pointer;
+  color: var(--link);
+  font-size: 0.875rem;
+  font-weight: 550;
+  overflow-wrap: anywhere;
+}
+details > summary:hover {
+  color: var(--ink);
+}
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+  }
+}
+
+/* Shell */
+.topbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 22px;
+  padding: 10px max(24px, calc((100vw - 1360px) / 2));
+  background: var(--graphite);
+  color: var(--on-graphite);
+}
+.topbar .brand {
+  color: var(--white);
+  font-size: 1.4rem;
+  font-weight: 750;
+  letter-spacing: -0.03em;
+  text-decoration: none;
+}
+.topbar .host {
+  font-size: 0.875rem;
+  overflow-wrap: anywhere;
+}
+.topbar nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 18px;
+  margin-left: auto;
+}
+.topbar nav a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 36px;
+  border-bottom: 2px solid transparent;
+  color: var(--on-graphite);
+  font-size: 0.875rem;
+  text-decoration: none;
+}
+.topbar nav a:hover {
+  color: var(--white);
+}
+.topbar nav a[aria-current="page"] {
+  border-bottom-color: var(--amber);
+  color: var(--white);
+  font-weight: 650;
+}
+.topbar button {
+  border-color: var(--rail-line);
+  background: transparent;
+  color: var(--white);
+}
+.topbar button:hover {
+  border-color: var(--white);
+  background: var(--graphite-soft);
+}
+main {
+  max-width: 1408px;
+  margin: 0 auto;
+  padding: 26px 24px 32px;
+}
+footer {
+  margin-top: 36px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 0.8125rem;
+}
+.page-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px 24px;
+  margin-bottom: 18px;
+}
+.page-heading p {
+  margin: 4px 0 0;
+  color: var(--muted);
+}
+.page-tools {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 0.8125rem;
+}
+.page-tools p {
+  margin: 0;
+}
+.page-tools button {
+  flex: none;
+  white-space: nowrap;
+}
+/* Identifiers keep their exact case in the data; only the headline's first
+   letter is capitalised, so "printer is stopped" still reads as a sentence. */
+.summary-title::first-letter {
+  text-transform: uppercase;
+}
+.summary-title[data-tone="stop"] {
+  color: var(--stop-ink);
+}
+.panel {
+  padding: 14px 18px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+section > h2,
+.section-title {
+  margin: 28px 0 10px;
+}
+
+/* Lamps */
+.lamp {
+  display: inline-block;
+  flex: none;
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--graphite);
+  border-radius: 50%;
+  background: var(--dark-lamp);
+}
+.lamp[data-state="clear"] {
+  background: var(--clear);
+}
+.lamp[data-state="caution"],
+.lamp[data-state="hold"] {
+  background: var(--amber);
+}
+.lamp[data-state="stop"] {
+  background: var(--stop);
+}
+.lamp[data-state="set"] {
+  background: var(--lunar);
+}
+.lamp[data-state="draft"] {
+  background: var(--draft);
+}
+
+/* The track is the signature move: name at the left, a rail running through four
+   lamps. Each stage's text sits directly under its lamp. */
+.tracks {
+  display: grid;
+  gap: 8px;
+}
+.track {
+  display: grid;
+  grid-template-columns: minmax(110px, 170px) minmax(0, 1fr);
+  align-items: center;
+  gap: 16px;
+  padding: 14px 18px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+.track-name {
+  color: var(--ink);
+  font-size: 1rem;
+  font-weight: 680;
+  overflow-wrap: anywhere;
+  text-decoration: none;
+}
+.track-name:hover {
+  text-decoration: underline;
+}
+.track-line {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.track-line::before {
+  content: "";
+  position: absolute;
+  top: 10px;
+  left: 12.5%;
+  right: 12.5%;
+  height: 4px;
+  background: var(--graphite);
+}
+.stage {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 0;
+  text-align: center;
+  font-size: 0.875rem;
+}
+.stage .lamp {
+  width: 24px;
+  height: 24px;
+  margin-bottom: 6px;
+  border-width: 4px;
+}
+.stage strong {
+  font-weight: 650;
+}
+.stage-detail {
+  color: var(--muted);
+  font-size: 0.8125rem;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+.stage[data-state="stop"] .stage-detail {
+  color: var(--stop-ink);
+  font-weight: 650;
+}
+.stage[data-state="caution"] .stage-detail {
+  color: var(--amber-ink);
+  font-weight: 650;
+}
+
+/* Tables: columns hold their position so the eye learns where to look. */
+.table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+caption {
+  padding: 10px 14px 0;
+  text-align: left;
+}
+th {
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-align: left;
+  white-space: nowrap;
+}
+td {
+  padding: 9px 14px;
+  border-top: 1px solid var(--line-soft);
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+thead + tbody tr:first-child td {
+  border-top: 0;
+}
+tbody tr:hover {
+  background: var(--raised);
+}
+tbody tr.selected,
+tbody tr[aria-current="true"] {
+  background: var(--amber-wash);
+}
+.cell-time {
+  width: 1%;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.cell-subject {
+  font-weight: 650;
+}
+.outcome {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.outcome .lamp {
+  width: 10px;
+  height: 10px;
+  border-width: 1.5px;
+}
+.outcome[data-state="stop"] {
+  color: var(--stop-ink);
+}
+.outcome[data-state="off"] {
+  color: var(--muted);
+  font-weight: 500;
+}
+.empty {
+  padding: 22px 14px;
+  color: var(--muted);
+  text-align: center;
+}
+
+/* Model answers read as a compact definition list, not as JSON. */
+.answers {
+  display: grid;
+  grid-template-columns: minmax(90px, max-content) minmax(0, 1fr);
+  gap: 4px 16px;
+  margin: 0;
+  font-size: 0.875rem;
+}
+.answers dt {
+  color: var(--muted);
+}
+.answers dd {
+  margin: 0;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 760px), (pointer: coarse) {
+  button,
+  input,
+  select,
+  textarea {
+    min-height: 44px;
+    font-size: 1rem;
+  }
+  .topbar nav a {
+    min-height: 44px;
+  }
+}
+@media (max-width: 760px) {
+  .topbar {
+    padding: 8px 16px 2px;
+  }
+  .topbar nav {
+    order: 3;
+    justify-content: space-between;
+    width: 100%;
+    margin: 0;
+    gap: 0 10px;
+  }
+  /* Lock moves up beside the host, which puts it in reach without a second row. */
+  .topbar button {
+    margin-left: auto;
+  }
+  main {
+    padding: 18px 16px 24px;
+  }
+  h1 {
+    font-size: 1.6rem;
+  }
+  .track {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+    padding: 12px;
+  }
+  .track-line {
+    gap: 4px;
+  }
+  .stage,
+  .stage-detail {
+    font-size: 0.75rem;
+  }
+  .stage strong {
+    font-size: 0.8125rem;
+  }
+  /* Tables reflow into records. Outcome must not vanish behind a sideways scroll
+     while only the message remains visible. */
+  .records thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+  .records,
+  .records tbody,
+  .records tr {
+    display: block;
+    width: 100%;
+  }
+  .records tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 2px 12px;
+    padding: 10px 12px;
+    border-top: 1px solid var(--line-soft);
+  }
+  .records td {
+    display: block;
+    padding: 0;
+    border: 0;
+    min-width: 0;
+  }
+  .records td.empty {
+    grid-column: 1 / -1;
+    padding: 12px 0;
+  }
+}
