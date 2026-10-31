@@ -1,0 +1,86 @@
+what's the url for the mrmr dashbaord?
+
+---
+
+well it should be on marvin no?
+
+---
+
+where can i view the config for the running mrmr on marvin?
+
+---
+
+ok i'd really like for you to confirm that the source units for systemd journal in that config are real services... 
+
+primarily because i don't think that lfm25.service is real anymore. and i'd like to set up one for hermes-dashboard.service.
+
+---
+
+ok so stop the lfm service, remove the model associated with it, and remove any "inferencing runtiems", too. i don't want models or inferencing happening there. 
+
+and then update the mrmr config to remove lfm serivce and add the hermes-dashboard.service please
+
+---
+
+ok so here's what i want now... a full removal of mrmr on marvin
+
+---
+
+yeah delete all of that data.
+
+---
+
+why am i getting this in the ssh terminal i'm in on marvin: 
+
+channel 3: open failed: connect failed: Connection refused
+channel 4: open failed: connect failed: Connection refused
+
+---
+
+ok i exited and then just normal ssh'd
+
+---
+
+ok so where are we now? i want to work on the dashboard/webui for mrmr because once it's on a machine, i want to be able to configure, manage, and see into mrmr and how it's working.
+
+---
+
+ok let's work through that. let's write code. use agents as necessary
+
+---
+
+just build it all please. don't work in sections, build it all
+
+---
+
+ok so continue working please
+
+---
+
+continue working
+
+---
+
+build the managment UI
+
+---
+
+ok -- i've been working with 6.1 terra trying to build the dashboard roadmap. i wanted a dashboard for mrmr that would allow me to configure, manage, and see into mrmr and how it's working. a full configuration and management dashboard. 
+
+how is it looking and what needs to be done?
+
+---
+
+fix and implement it all please
+
+---
+
+ok continue finishing what you need to
+
+---
+
+ok i'd like for you to now update the docs (readme, etc.) in this repo to reflect this update
+
+---
+
+ok now i'd like to install/run mrmr on marvin
