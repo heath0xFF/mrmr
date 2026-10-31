@@ -1,0 +1,91 @@
+can you check entire's status for this
+
+---
+
+can we clean that up? or do we need to?
+
+---
+
+yeah sure
+
+---
+
+no i'm good. i just want to start using entire more so i want to just make sure we're in good shape
+
+---
+
+how do we fix those unsaved turns
+
+---
+
+ok all set.
+
+---
+
+ok in a previous session we installed mrmr on marvin with the new management dashboard. what should i be doing now
+
+---
+
+ok walk me through set up for that with my system -- i think i have two models running on deepthought now, liquid d1 and something else
+
+---
+
+> Copy the existing d1 credential securely from Deepthought to Marvin’s private service environment.
+
+how do i get this
+
+---
+
+/var/folders/5s/yzz579nx67j35fd1648738580000gn/T/rex-clipboard-B46FA01E-C0E9-4049-B5EF-0CA41D2B051B.png
+
+---
+
+ok i saved and activated. please vadliate
+
+---
+
+ok fix it, and then i think we need to really rework this configuration screen. it's very complicated and not user friendly
+
+---
+
+start the UI changes... uses impeccable as needed
+
+---
+
+deploy to marvin
+
+---
+
+how do i get that damn token again? why do we have it set?
+
+---
+
+ok i want to set up mrmr to watch the hermes dashboard service. how do i get the credential env variable?
+
+---
+
+so why do i need that if i control both endpoints? like... the d1 service runs on deepthought, right?
+
+---
+
+oh since when does it require api keys to accpet requests??? i didn't know that
+
+---
+
+ok thanks for that. 
+
+ok so now i'd like for it to instead of shadow, actually send me discord messages
+
+---
+
+ok let's get the code in for discord. 
+
+and then what i'd like the UI to be is like "add a monitoring service" or something and then have a "current config page" which shows all the active monitoring configs ya know?
+
+---
+
+do that
+
+---
+
+ok deploy and then let's get this pushed
