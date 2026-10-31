@@ -133,7 +133,7 @@ function renderOverview(data) {
     if (source.type === 'systemd-journal') {
       const scope = node('details'); scope.dataset.keepId = `source:${source.name}`;
       scope.append(node('summary', `${source.units.length} selected units`));
-      scope.append(node('p', `Exact system units only; user services excluded. First activation starts at the tail, not historical backfill. Event type: ${source.event_type}. Last poll started: ${stamp(h.started_at)}.`));
+      scope.append(node('p', `Exact ${source.scope === 'user' ? 'user units for the runtime account' : 'system units'} only. First activation starts at the tail, not historical backfill. Event type: ${source.event_type}. Last poll started: ${stamp(h.started_at)}.`));
       const list = node('ul', undefined, 'units'); source.units.forEach(unit => list.append(node('li', unit)));
       scope.append(list); el.append(scope);
     } else {

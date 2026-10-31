@@ -61,7 +61,7 @@ func TestManagementActivationDrainsBeforeSwitch(t *testing.T) {
 		t.Fatal(err)
 	}
 	done := make(chan error, 1)
-	go func() { done <- m.activate(context.Background(), cfg, candidate, old.revision) }()
+	go func() { done <- m.activate(context.Background(), cfg, candidate, old.revision, false) }()
 	select {
 	case <-stopping:
 	case <-time.After(time.Second):
@@ -101,7 +101,7 @@ func TestManagementFailedSourceKeepsRuntimeAndCursor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = m.activate(context.Background(), c, candidate, m.activeRevision()); err == nil {
+	if err = m.activate(context.Background(), c, candidate, m.activeRevision(), false); err == nil {
 		t.Fatal("missing source credential passed readiness")
 	}
 	if m.current.Load().yaml != controlYAML {
@@ -116,7 +116,7 @@ func TestManagementFailedSourceKeepsRuntimeAndCursor(t *testing.T) {
 	if err := m.db.SetCursor("feed", ""); err != nil {
 		t.Fatal(err)
 	}
-	if err = m.activate(context.Background(), c, candidate, m.activeRevision()); err == nil {
+	if err = m.activate(context.Background(), c, candidate, m.activeRevision(), false); err == nil {
 		t.Fatal("missing credential accepted")
 	}
 	var count int

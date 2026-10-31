@@ -99,7 +99,7 @@ the separate read-only dashboard; no frontend service is required.
 | Read-only dashboard | Private activity, source-poll health, policy boundaries, event traces, unfinished intents, and model request latency |
 | Connections | Standalone Superhuman OAuth login and read-only connection check; email polling is not implemented yet |
 
-**Not implemented:** browser live promotion, effect approvals, source previews,
+**Not implemented:** browser live actions/delegation, effect approvals, source previews,
 reusable dataset selection tools, multiple independently routed Flows, or automatic
 file-watch reload. MCP polling/tool calls, native SaaS integrations, built-in cron,
 XML RSS parsing, exec actions, and notification adapters beyond stdout/Discord also
@@ -545,15 +545,16 @@ sources:
 
 The [complete shadow-mode example](recipes/homelab-journal/mrmr.example.yaml) includes a model schema and policy. Edit its endpoint and unit names for your host; copying a source into another config does **not** automatically shadow that config's outcomes.
 
-- Requires Linux, `journalctl` with `--lines=+N` support, and system-journal read permission. Startup checks these prerequisites before starting any sources. HTTP-only configurations remain portable.
-- Selects exact **system** units and priorities at or above the chosen severity: `emerg`, `alert`, `crit`, `err`, `warning`, `notice`, `info`, or `debug`. No unit globs, user-unit support, remote journals, or automatic historical backfill. Hermes running as a user service is outside this initial slice. System services that run as a regular UID are supported: their records can reside in per-user journal files. Trusted unit fields, not file ownership, enforce selection.
+- Requires Linux, `journalctl` with `--lines=+N` support, and journal read permission. Startup checks these prerequisites before starting any sources. HTTP-only configurations remain portable.
+- Selects exact units and priorities at or above the chosen severity: `emerg`, `alert`, `crit`, `err`, `warning`, `notice`, `info`, or `debug`. `scope: system` is the default. Use `scope: user` for the runtime account's user services, including a user-run Hermes dashboard. Trusted journal unit and UID fields enforce selection; another user's identically named unit is excluded. No unit globs, arbitrary user selection, remote journals, or historical backfill. System services under regular UIDs remain supported across per-user journal files.
+- An omitted scope and explicit `system` scope are equivalent. Changing an existing source between system and user scope requires a new name. Older binaries cannot parse the new scope field; review configuration compatibility before rollback.
 - First activation checkpoints the current accessible journal tail without interpreting history. Later starts resume the SQLite cursor. Changing the unit selection does not replay old records.
 - Scans at most **100 accessible journal records per tick**, oldest first, applying unit/severity checks before ingestion. Unselected records advance the checkpoint without becoming Events. Busy journals can lag; shorten `every` (minimum `1s`) if needed. Each journalctl process is bounded to 15 seconds and 4 MiB stdout, and is reaped before model calls.
-- Persists selected Events with the unit as `subject`, the original journal timestamp, and `data.unit`, numeric `data.priority`, and `data.message`. Manager-emitted service transitions are recognized through PID 1's `UNIT` field. Binary/oversized journal fields are marked `message_omitted`; text is capped at 4096 bytes with `message_truncated` when necessary. Other journal fields are not copied into event data.
+- Persists selected Events with the unit as `subject`, the original journal timestamp, and `data.unit`, numeric `data.priority`, and `data.message`. System-manager transitions use PID 1's `UNIT` field. User-manager transitions use `USER_UNIT` only from the account's `init.scope` systemd process at `/usr/lib/systemd/systemd` or `/lib/systemd/systemd`. User Events also include `data.scope` and `data.uid`. Binary/oversized journal fields are marked `message_omitted`; text is capped at 4096 bytes with `message_truncated` when necessary. Other journal fields are not copied into event data.
 - Uses the journal's opaque cursor as `metadata.source_event_id`. Failed batches retain the checkpoint; already stored records deduplicate. This does not repair the runtime's partial-processing/crash-recovery limitations.
 - An inaccessible or vacuumed checkpoint causes a clear error, **not** a silent jump to the tail. Restore access/retained journals, or explicitly choose a new source name if abandoning the old position is acceptable. Old data is not deleted automatically.
 
-**Permissions:** run `journalctl --system --no-pager -n 1 -o json --output-fields=__CURSOR` as the same account that runs mrmr. If access is denied or journalctl warns, have an administrator grant appropriate read access (often membership in `systemd-journal` or `adm`), then restart the login/service session. Group membership grants broad journal visibility: ask before changing it. Do not run mrmr as root to bypass this check. A host with no readable journal entries also fails startup rather than pretending the source works.
+**Permissions:** run `journalctl --no-pager -n 1 -o json --output-fields=__CURSOR` as the same account that runs mrmr. If access is denied or journalctl warns, have an administrator grant appropriate read access (often membership in `systemd-journal` or `adm`), then restart the login/service session. Group membership grants broad journal visibility: ask before changing it. Do not run mrmr as root to bypass this check. A host with no readable journal entries also fails startup rather than pretending the source works.
 
 Journal content may contain credentials or private application data. Unit filtering is not secret redaction. Start with shadow, use an approved model endpoint, and review selected records before trusting this source. Avoid selecting mrmr's own unit; the adapter excludes its current process's journal messages to prevent immediate feedback.
 
@@ -632,7 +633,7 @@ runtime. Use evaluation cancellation for a running evaluation.
   Invalid configuration and failed readiness checks retain the running revision.
 - Pause/resume or remove a source through the draft. Source names retain their
   cursors. A transport or mapping change requires a new source identity; a new
-  journal starts at its current tail. User-service journal collection is not supported.
+  journal starts at its current tail. User scope selects only the runtime account.
 - Load a prior revision into the editor, then validate/save/activate to roll back.
   Rollback changes future work, not existing events or effects already sent.
 - Review events, record expected category/action/outcome, mark origin as real,
@@ -649,8 +650,8 @@ runtime. Use evaluation cancellation for a running evaluation.
 - Return all effects to shadow, including work still interpreting under an older
   revision. This safety gate survives restart, including a restart without the
   management listener. It cannot recall effects already dispatched. This release
-  intentionally provides **no browser control to lift the safety gate or promote
-  rules live**.
+  intentionally provides **no browser control to lift the safety gate or enable
+  live actions/delegation**. Explicitly confirmed live notifications are supported.
 
 ### Current configuration and monitoring services
 
@@ -663,8 +664,10 @@ then save and activate the source change. They do not stop the watched service.
 Pending drafts require explicit replacement consent.
 
 Choose **Add monitoring service → Service → Model → Notifications → Test and
-start**. Select exact Linux system units, severity, and poll interval. User-service
-journals, including user-run Hermes services, are not supported yet.
+start**. Select exact Linux units, system/user scope, severity, and poll interval.
+User scope means the runtime service account, not every user. Applications can log
+error text at journald's info level; choose info and higher when needed. A scope
+change requires a new source identity, with no historical backfill.
 
 Reuse a named model connection without entering its credential reference again,
 or connect another model with a new name. The runtime must reach its API base
@@ -684,8 +687,12 @@ delivery test. Default alert text contains the service, source, and Event ID,
 not raw journal text. Mentions and link previews remain disabled.
 
 The guide creates or replaces only the selected monitor's questions and rules:
-category, action needed, and severity. Incident plus action needed selects a shadow
-notification; otherwise ignore. System One providers use editable confidence/action
+category, action needed, and severity. Incident plus action needed selects a
+notification; otherwise ignore. **Send notifications** enables delivery after
+explicit activation confirmation. **Preview only** records outcomes without sending
+(shadow). New monitors default to Send notifications; edits retain the current mode.
+Live Discord activation requires a valid stored/environment credential. It does not
+prove delivery or model accuracy. Live actions and agents remain blocked by management. System One providers use editable confidence/action
 thresholds, initially 0.85. OpenAI-compatible generated answers use the boolean
 action answer, not invented probabilities. Other monitors, shared filters, agents,
 and legacy rules stay intact. A paused source remains paused. Use Advanced to
@@ -701,8 +708,8 @@ intent/result is audited; the detailed result stays in browser memory and is
 invalidated by edits or reload. Valid responses prove connectivity, not correct
 judgment; answer/outcome mismatches are shown separately. No test promotes effects.
 
-After a successful connection test, review scope and confirm **Start in shadow**
-(or **Apply monitor in shadow**). This saves and activates the exact draft using the same
+After a successful connection test, review scope and delivery mode, then confirm
+**Start monitoring** (or **Apply monitor changes**). This saves and activates the exact draft using the same
 revision and source-readiness checks as Advanced. Activation rejects placeholder
 interpreters, invalid model base URLs, and missing credential references. Model
 HTTP clients do not follow redirects, including outside setup; configure the final
@@ -740,8 +747,8 @@ For custom pipelines, open **Advanced configuration**.
 4. Confirm activation. Wait for readiness checks and source draining, then verify
    the active revision and new source/event evidence in Overview and Activity.
 5. To recover, load a prior revision into the editor, validate, save, and activate
-   it under the same shadow-only rules. A prior live configuration cannot bypass
-   the activation restriction.
+   it under the same notification-consent rules. A prior live action or agent
+   configuration cannot bypass the activation restriction.
 
 Advanced also exposes pause/resume as a source setting in the draft. It takes effect only on activation;
 pausing one source does not stop HTTP ingress or other sources. Resuming retains
@@ -782,7 +789,8 @@ configuration and credential presence, not endpoint availability. The explicit
 synthetic setup test makes bounded inference calls; ordinary validation does not. Configurations containing inline
 credentials must be converted to environment references before enabling management.
 Enabling management on an existing installation does not itself shadow live
-rules. Review them before startup; browser activation accepts only shadow or ignore.
+rules. Review them before startup. Browser activation requires explicit consent
+for live notifications; actions and delegation must remain in shadow.
 
 ### Upgrade and backup
 

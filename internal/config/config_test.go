@@ -628,10 +628,24 @@ sources:
 	if cfg.Sources[0].Every != 30*time.Second || len(cfg.Sources[0].Units) != 2 {
 		t.Fatal("documented journal source did not load")
 	}
+	for _, scope := range []string{"system", "user"} {
+		parsed, err := Parse([]byte(strings.Replace(text, "type: systemd-journal", "type: systemd-journal\n    scope: "+scope, 1)))
+		if err != nil || parsed.Sources[0].Scope != scope {
+			t.Fatalf("scope %s: %v", scope, err)
+		}
+	}
 	for _, tc := range []struct {
 		name string
 		edit func(*Source)
 	}{
+		{"bad scope", func(s *Source) { s.Scope = "all-users" }},
+		{"scope on HTTP", func(s *Source) {
+			s.Type = "http-poller"
+			s.URL = "http://localhost/feed"
+			s.Units = nil
+			s.Priority = ""
+			s.Scope = "user"
+		}},
 		{"no units", func(s *Source) { s.Units = nil }},
 		{"wildcard", func(s *Source) { s.Units = []string{"*.service"} }},
 		{"option", func(s *Source) { s.Units = []string{"--user.service"} }},

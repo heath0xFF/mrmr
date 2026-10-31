@@ -29,7 +29,7 @@ function configView(view) {
   $("config-description").textContent =
     view === "current"
       ? "The monitoring services in the active revision. Draft changes are not running."
-      : "Save monitor edits as a draft, then Apply to run them in shadow. Connection saves take effect immediately.";
+      : "Save monitor edits as a draft, then Apply to run them with the selected notification mode. Connection saves take effect immediately.";
 }
 function renderMonitors() {
   const doc = state.config.document;
@@ -87,7 +87,7 @@ function renderMonitors() {
       [
         "Collection",
         source.type === "systemd-journal"
-          ? `${(source.units || []).join(", ")} · ${source.priority} and higher · every ${source.every}`
+          ? `${source.scope || "system"} units · ${(source.units || []).join(", ")} · ${source.priority} and higher · every ${source.every}`
           : `${source.type} · ${source.event_type} · every ${source.every}`,
       ],
       [

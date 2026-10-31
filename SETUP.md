@@ -166,13 +166,13 @@ After the smoke test passes, prepare the intended installation in the agreed dir
 
 - Install the verified binary to the agreed path without silently overwriting an existing binary.
 - Give the final config an explicit loopback bind and an absolute, user-owned database path separate from `smoke.db`.
-- Replace the temporary always-notify policy with rules appropriate to the user's goal and `default: {ignore: true}`. Keep `shadow: true` on every rule capable of effects until a separate review supports an explicitly approved live change. Browser activation remains shadow-only.
+- Replace the temporary always-notify policy with rules appropriate to the user's goal and `default: {ignore: true}`. Keep `shadow: true` on every rule capable of effects until a separate review supports an explicitly approved live change. Browser activation can enable notifications with explicit consent; actions and agents remain shadow-only.
 - Configure only the source the user requested. Starting it requires confirmation of the data access, model destination, and polling interval; sources fetch immediately. Sources can have independent interpretation/policy contracts under `monitors`; filters, connections, storage, and the effect safety gate remain shared.
 - Keep files and directories holding config, logs, and data private to the user. Configuration should contain secret references, not values.
 
 For an HTTP JSON source, follow the [polling configuration](README.md#http-polling). Confirm the record array path, stable ID field, and sample payload shape without exposing private records. IDs are dedup keys; changing a record without changing its ID does not emit an update. Failed or malformed records hold the watermark for retry; permanently malformed records require correcting the source. Cursor ordering/pagination is limited, and already-persisted partial processing has no recovery replay: do not promise lossless synchronization.
 
-For Linux system-journal ingestion, use the [built-in source and shadow example](README.md#linux-system-journal), not a forwarding script or second service. Confirm the exact system-unit allowlist and severity. Check journal access as the service account; ask before changing group membership, and never run mrmr as root as a workaround. Startup begins at the current tail without backfill, so final verification needs a new authorized record after activation. User services (including a Hermes user service) are not supported in this slice. System services running under a regular UID are supported even when journald stores their messages in per-user journal files; verify this with a canary under the same service account. A missing/vacuumed checkpoint is a blocker, not permission to silently reset history.
+For Linux system-journal ingestion, use the [built-in source and shadow example](README.md#linux-system-journal), not a forwarding script or second service. Confirm the exact system-unit allowlist and severity. Check journal access as the service account; ask before changing group membership, and never run mrmr as root as a workaround. Startup begins at the current tail without backfill, so final verification needs a new authorized record after activation. Use `scope: user` for user services owned by the runtime account, including Hermes. Other users' units are excluded. Choose info and higher if application error text is recorded at info severity. System services running under a regular UID are supported even when journald stores their messages in per-user journal files; verify this with a canary under the same service account. A missing/vacuumed checkpoint is a blocker, not permission to silently reset history.
 
 For API ingestion, the caller must send normalized events and supply stable `metadata.source_event_id` values. mrmr does not verify provider webhook signatures on their behalf.
 
@@ -240,7 +240,10 @@ Reuse an existing model connection or provision a new one on the runtime host.
 Each monitor gets its own questions and shadow policy without replacing other
 monitors. Confirm the scope before activation. Existing names, cursors, and paused
 states stay intact. Missing model credentials and example identities block tests
-and activation. The guide supports system units only, not user-unit journals.
+and activation. Select System service or User service (runtime account) explicitly.
+Send notifications is available for live alerts; Preview only keeps them in shadow.
+Editing a monitor preserves that choice. Confirm delivery scope when applying.
+Live notification use is an operator decision, not proof of model quality.
 
 The visible **Save configuration** control saves a draft; **Review and apply**
 is a separate step. Saving a monitor draft does not start collection or effects.
@@ -253,8 +256,9 @@ A saved connection overrides its matching environment reference, normally
 `MRMR_DISCORD_WEBHOOK_URL`. Existing live users of the connection can send to the
 new destination immediately; saving does not promote shadow rules. Shadow
 setup can retain a missing Discord reference, but it is not ready for delivery.
-The synthetic model test sends no messages. Live promotion and authorized delivery
-tests remain separate work. A configuration containing `monitors` needs the new
+The synthetic model test sends no messages. Live notifications require explicit
+activation consent and a valid credential. Test delivery separately with operator
+authorization; never infer success from credential presence alone. A configuration containing `monitors` needs the new
 binary; retain a compatible YAML backup before upgrade or binary rollback.
 
 Use **Advanced configuration** for custom interpretation/filter/agent settings

@@ -48,8 +48,8 @@ func TestManagementBrowser(t *testing.T) {
 	if err != nil {
 		t.Fatalf("browser: %v\n%s", err, out)
 	}
-	if modelCalls.Load() != 4 {
-		t.Fatalf("guided setup made %d model calls, want two explicit two-example tests", modelCalls.Load())
+	if modelCalls.Load() != 6 {
+		t.Fatalf("guided setup made %d model calls, want three explicit two-example tests", modelCalls.Load())
 	}
 	t.Log(string(out))
 }

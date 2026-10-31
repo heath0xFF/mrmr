@@ -59,8 +59,9 @@ type Source struct {
 	SubjectField   string        `yaml:"subject_field"`    // optional
 	TimestampField string        `yaml:"timestamp_field"`  // optional; RFC3339
 	EventType      string        `yaml:"event_type"`
-	Units          []string      `yaml:"units"`    // systemd-journal: exact system unit names
-	Priority       string        `yaml:"priority"` // systemd-journal: this severity or higher
+	Scope          string        `yaml:"scope,omitempty"` // systemd-journal: system (default) or this account's user units
+	Units          []string      `yaml:"units"`           // systemd-journal: exact unit names
+	Priority       string        `yaml:"priority"`        // systemd-journal: this severity or higher
 }
 
 // A destination secret must be a literal environment reference, not a URL
@@ -68,7 +69,7 @@ type Source struct {
 var environmentName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 var dashboardDNSLabel = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
 
-// Exact names only: no patterns, journalctl options, paths, or user-unit
+// Exact names only: no patterns, journalctl options, paths, or arbitrary UID
 // selectors. This intentionally accepts a conservative subset of systemd
 // names; escaped unit names can be added when a real source needs them.
 var journalUnitName = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.@:-]*\.(service|socket|timer|target|mount|automount|path|slice|scope|swap|device)$`)
@@ -409,10 +410,13 @@ func (c *Config) Validate() error {
 			if s.URL == "" {
 				return fmt.Errorf("config: source %q: url is required", s.Name)
 			}
-			if len(s.Units) != 0 || s.Priority != "" {
-				return fmt.Errorf("config: source %q: units and priority require systemd-journal", s.Name)
+			if len(s.Units) != 0 || s.Priority != "" || s.Scope != "" {
+				return fmt.Errorf("config: source %q: scope, units, and priority require systemd-journal", s.Name)
 			}
 		case "systemd-journal":
+			if s.Scope != "" && s.Scope != "system" && s.Scope != "user" {
+				return fmt.Errorf("config: source %q: journal scope must be system or user", s.Name)
+			}
 			if s.URL != "" || s.BearerTokenEnv != "" || s.ItemPath != "" || s.CursorField != "" || s.SubjectField != "" || s.TimestampField != "" {
 				return fmt.Errorf("config: source %q: HTTP fields are not supported for systemd-journal", s.Name)
 			}

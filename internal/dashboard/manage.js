@@ -691,6 +691,7 @@ async function activateDraft() {
       expected: state.config.draft.revision,
       base: state.config.revision,
       confirm: true,
+      allow_live_notify: true,
     });
     await loadConfig();
     await overview();
@@ -827,6 +828,7 @@ async function updateForms() {
         ["source-every", source.every],
         ["source-units", (source.units || []).join(", ")],
         ["source-priority", source.priority || "warning"],
+        ["source-scope", source.scope || "system"],
         ["source-url", source.url],
         ["source-items", source.item_path],
         ["source-cursor", source.cursor_field],
@@ -880,7 +882,7 @@ async function updateForms() {
 // Hide transport-specific fields; an irrelevant field must not look required.
 function sourceFields() {
   const journal = $("source-type").value === "systemd-journal";
-  for (const id of ["source-units", "source-priority"])
+  for (const id of ["source-units", "source-priority", "source-scope"])
     $(id).parentElement.hidden = !journal;
   for (const id of [
     "source-url",
@@ -932,6 +934,7 @@ $("source-form").addEventListener("submit", async (e) => {
         .map((s) => s.trim())
         .filter(Boolean);
       source.priority = $("source-priority").value;
+      source.scope = $("source-scope").value;
     } else {
       source.url = $("source-url").value;
       for (const [field, id] of [

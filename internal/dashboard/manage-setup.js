@@ -39,12 +39,13 @@ function loadSetup(doc, sourceName = null) {
   const source = (doc.sources || []).find((s) => s.name === sourceName);
   if (sourceName && (!source || source.type !== "systemd-journal"))
     throw Error(
-      "This guide edits system-journal sources only. Use Advanced configuration.",
+      "This guide edits journal sources only. Use Advanced configuration for other sources.",
     );
   const prior = source ? monitorContract(doc, source) : null;
   $("setup-name").value = source?.name || "";
   $("setup-units").value = (source?.units || []).join(", ");
   $("setup-priority").value = source?.priority || "warning";
+  $("setup-scope").value = source?.scope || "system";
   $("setup-every").value = source?.every || "30s";
   $("setup-cursor").textContent = source
     ? `Its name and saved journal position are retained.${source.paused ? " It remains paused. Resume collection from Current configuration when ready." : " Collection continues from its saved position."}`
@@ -67,6 +68,14 @@ function loadSetup(doc, sourceName = null) {
   $("setup-env").value = "";
   $("setup-connection-name").value = "";
   const first = prior?.policy?.[0];
+  const notifications = [
+    ...(prior?.policy || []).map((r) => r.then),
+    prior?.default || {},
+  ].filter((t) => t.notify);
+  $("setup-delivery").value =
+    notifications.length && notifications.every((t) => t.shadow)
+      ? "preview"
+      : "live";
   $("setup-notify").value =
     first?.then?.notify?.via === "stdout" ? "stdout" : "discord";
   const references = new Set([
@@ -101,8 +110,8 @@ function loadSetup(doc, sourceName = null) {
     $(id).value = match ? match[1] : "0.85";
   }
   $("setup-start").textContent = source
-    ? "Apply monitor in shadow"
-    : "Start in shadow";
+    ? "Apply monitor changes"
+    : "Start monitoring";
   connectionFields();
   notificationFields();
   refreshSetupStart();
@@ -284,7 +293,10 @@ function refreshSetupStart() {
     !setupState.test?.ready ||
     setupState.test.yaml !== $("yaml").value ||
     !$("setup-confirm").checked;
-  if (!state.configBusy) $("setup-name").disabled = !!setupState.sourceName;
+  if (!state.configBusy) {
+    $("setup-name").disabled = !!setupState.sourceName;
+    $("setup-scope").disabled = !!setupState.sourceName;
+  }
 }
 $("setup-confirm").addEventListener("change", refreshSetupStart);
 $("setup-form").addEventListener("input", (e) => {
@@ -422,7 +434,12 @@ function serviceMonitorDocument() {
     ...doc.monitors,
     [sourceName]: {
       interpret,
-      policy: [{ if: conditions, then: { notify, shadow: true } }],
+      policy: [
+        {
+          if: conditions,
+          then: { notify, shadow: $("setup-delivery").value === "preview" },
+        },
+      ],
       default: { ignore: true },
     },
   };
@@ -430,6 +447,7 @@ function serviceMonitorDocument() {
     ...source,
     name: sourceName,
     type: "systemd-journal",
+    scope: $("setup-scope").value,
     event_type: source?.event_type || "service.warning",
     every: $("setup-every").value.trim(),
     units: $("setup-units")
@@ -461,7 +479,10 @@ function setupSummary() {
       "Monitor",
       `${source.name}${source.paused ? " (paused)" : ""}: ${source.units.join(", ")}`,
     ],
-    ["Collection", `${source.priority} and higher, every ${source.every}`],
+    [
+      "Collection",
+      `${source.scope} services · ${source.priority} and higher, every ${source.every}`,
+    ],
     [
       "Model",
       `${contract.interpret.model}: ${model.model} at ${model.base_url}`,
@@ -469,14 +490,14 @@ function setupSummary() {
     [
       "Notifications",
       notify.via === "discord"
-        ? `Discord via ${notify.webhook_env} · shadow only; delivery untested`
-        : "Runtime log · shadow only",
+        ? `Discord via ${notify.webhook_env} · ${$("setup-delivery").value === "preview" ? "preview only; no messages sent" : "live alerts"}`
+        : `Runtime log · ${$("setup-delivery").value === "preview" ? "preview only" : "live notifications"}`,
     ],
     [
       "Policy",
       model.provider === "openai-compatible"
-        ? "Incident + action needed → shadow notification; otherwise ignore."
-        : `Incident + confidence ≥ ${$("setup-confidence").value} + action probability ≥ ${$("setup-action-probability").value} → shadow notification; otherwise ignore.`,
+        ? "Incident + action needed → selected notification mode; otherwise ignore."
+        : `Incident + confidence ≥ ${$("setup-confidence").value} + action probability ≥ ${$("setup-action-probability").value} → selected notification mode; otherwise ignore.`,
     ],
     [
       "Other work",
@@ -601,7 +622,7 @@ setupAction("setup-start", async () => {
     $("apply-confirm").checked = true;
     await activateDraft();
     notice(
-      "Monitor configuration is active in shadow. No messages are sent. Check Overview for poll health and Activity for new Events.",
+      "Monitor configuration is active with the selected notification mode. Check Overview for poll health and Activity for delivery results.",
     );
     $("add-monitor").focus();
   });

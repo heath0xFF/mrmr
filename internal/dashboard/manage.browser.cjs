@@ -248,7 +248,7 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
       document.getElementById('setup-model').value='setup-browser-model';
       document.getElementById('setup-url').value=${JSON.stringify(process.env.MRMR_BROWSER_MODEL_URL)};
       const doc=serviceMonitorDocument();
-      if(doc.models.judge || doc.interpret.model!=='d1' || !doc.default.ignore || !doc.monitors['first-monitor'].policy[0].then.shadow)
+      if(doc.models.judge || doc.interpret.model!=='d1' || !doc.default.ignore || doc.monitors['first-monitor'].policy[0].then.shadow)
         throw Error('unsafe bootstrap conversion');
       await api('/manage/api/compose',{document:doc});
     })()`);
@@ -263,6 +263,7 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
       await setDocument(doc);
       window.otherSource=JSON.stringify((await validated()).sources[1]);
       loadSetup(doc,'existing-monitor');
+      document.getElementById('setup-delivery').value='preview';
       document.getElementById('setup-next-source').click();
     })()`);
     await until("!document.querySelector('[data-setup-step=\"1\"]').hidden");
@@ -458,6 +459,7 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
     await evaluate(`
       document.getElementById('setup-name').value='third-monitor';
       document.getElementById('setup-units').value='third.service';
+      document.getElementById('setup-scope').value='user';
       document.getElementById('setup-next-source').click();
       document.getElementById('setup-connection').value='service-model';
       document.getElementById('setup-connection').dispatchEvent(new Event('change'));
@@ -512,7 +514,7 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
     assert.ok(
       await evaluate(`(async()=>{
       const doc=await validated(), active=state.config.document;
-      return doc.sources.length===3 && doc.monitors['third-monitor'].interpret.model==='service-model'
+      return doc.sources.length===3 && doc.sources[2].scope==='user' && !doc.monitors['third-monitor'].policy[0].then.shadow && doc.monitors['third-monitor'].interpret.model==='service-model'
         && JSON.stringify(doc.models)===JSON.stringify(active.models)
         && JSON.stringify(doc.monitors['existing-monitor'])===JSON.stringify(active.monitors['existing-monitor']);
     })()`),
@@ -531,6 +533,30 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
       if(!rejected) throw Error('duplicate monitor name accepted');
       configView('current'); setupState.dirty=false;
     })()`);
+    // Activate live notifications only on a paused fixture. This verifies the
+    // real UI consent path without sending any request to Discord.
+    await evaluate(`(async()=>{
+      const doc=await validated();doc.sources.find(s=>s.name==='third-monitor').paused=true;
+      await setDocument(doc);loadSetup(doc,'third-monitor');await reviewSetup();
+      document.getElementById('setup-test').click();
+    })()`);
+    await until(
+      "!state.configBusy && document.getElementById('setup-test-result').textContent.includes('Connected:')",
+    );
+    await evaluate(
+      "document.getElementById('setup-confirm').checked=true;document.getElementById('setup-confirm').dispatchEvent(new Event('change'));document.getElementById('setup-start').click()",
+    );
+    await until(
+      "!state.configBusy && state.config.document.sources.length===3",
+    );
+    await evaluate("beginMonitor('third-monitor')");
+    assert.ok(
+      await evaluate(
+        "document.getElementById('setup-delivery').value==='live' && document.getElementById('setup-scope').value==='user' && document.getElementById('setup-scope').disabled && !serviceMonitorDocument().monitors['third-monitor'].policy[0].then.shadow",
+      ),
+      "editing silently changed a live user-service monitor to preview",
+    );
+    await evaluate("configView('current')");
     // Restore the original label contract before the existing review journey.
     await evaluate(
       "(()=>{const prior=window.confirm;window.confirm=()=>true;document.getElementById('open-advanced').click();[...document.querySelectorAll('#revisions button')].at(-1).click();window.confirm=prior;})()",

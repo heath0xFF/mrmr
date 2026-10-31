@@ -26,7 +26,9 @@ provides Overview, Activity, Review, Configure, and Runtime in one binary:
 - Current configuration lists active monitors separately from drafts. Add/edit
   system-service workflows reuse model connections and select source-local
   questions/policy plus Discord or stdout notifications. A bounded two-example
-  test selects the specific source. Activation remains shadow-only. Advanced
+  test selects the specific source. Activation permits explicitly confirmed live
+  notifications, while actions/delegation remain shadow-only. Journal scope can
+  select system services or the runtime account's user services. Advanced
   retains other source types, shared defaults, and custom contracts.
 - Browser labels, explicit origin and uncertainty, CLI conflict checks, label
   history, and an operator audit.
@@ -332,7 +334,8 @@ Deliver in two increments:
   readiness checks, and rollback. Do not implement activation by accepting shell
   commands or arbitrary service names from the browser.
 
-The shadow-only activation slice does not yet provide a full pipeline check.
+The activation slice does not yet provide a full pipeline check. Explicit live
+notification consent does not establish model quality or authorize actions/agents.
 Before using changed filters/routing to justify live promotion, add a separately
 named, effect-free check for the applicable deterministic filters, depth guard,
 interpreter selection, and policy. Include would-be filtered Events in the results rather

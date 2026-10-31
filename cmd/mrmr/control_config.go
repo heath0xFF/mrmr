@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/heath0xff/mrmr/internal/config"
+	"github.com/heath0xff/mrmr/internal/notify"
 	"github.com/heath0xff/mrmr/internal/policy"
 	"github.com/heath0xff/mrmr/internal/runtime"
 	"github.com/heath0xff/mrmr/internal/source"
@@ -26,10 +27,11 @@ type configDraft struct {
 	Base     string `json:"base"`
 }
 type configRequest struct {
-	YAML     string `json:"yaml"`
-	Expected string `json:"expected"`
-	Base     string `json:"base"`
-	Confirm  bool   `json:"confirm"`
+	YAML            string `json:"yaml"`
+	Expected        string `json:"expected"`
+	Base            string `json:"base"`
+	Confirm         bool   `json:"confirm"`
+	AllowLiveNotify bool   `json:"allow_live_notify"`
 }
 
 func (m *manager) prepare(ctx context.Context, c *config.Config) ([]sourceJob, error) {
@@ -334,7 +336,7 @@ func (m *manager) route(w http.ResponseWriter, r *http.Request) error {
 			http.Error(w, "Save this exact draft against the active revision before applying it.", 409)
 			return nil
 		}
-		if err = m.activate(r.Context(), c, req.YAML, req.Base); err != nil {
+		if err = m.activate(r.Context(), c, req.YAML, req.Base, req.AllowLiveNotify); err != nil {
 			return err
 		}
 		return controlJSON(w, map[string]string{"revision": m.activeRevision()})
@@ -390,20 +392,41 @@ func (m *manager) route(w http.ResponseWriter, r *http.Request) error {
 	}
 }
 
-func (m *manager) activate(ctx context.Context, c *config.Config, text, base string) (resultErr error) {
+func (m *manager) activate(ctx context.Context, c *config.Config, text, base string, allowLiveNotify bool) (resultErr error) {
 	// Network binding and database relocation require a supervised process
 	// restart. Refuse them here rather than claiming a partial activation.
 	if c.Server != m.bootstrap.Server || c.DB != m.bootstrap.DB {
 		return fmt.Errorf("Listener and database changes require a process restart; keep the current server and db settings.")
 	}
+	// Confirmation grants notification delivery only. It cannot authorize HTTP
+	// actions, emitted events, agents, or removal of the persistent safety stop.
 	for _, p := range c.Policies() {
+		outcomes := []policy.Then{p.Default}
 		for _, r := range p.Rules {
-			if r.Then.Outcome() != "ignore" && !r.Then.Shadow {
-				return fmt.Errorf("Management activation requires shadow effects. Live promotion needs reviewed evaluation evidence.")
-			}
+			outcomes = append(outcomes, r.Then)
 		}
-		if p.Default.Outcome() != "ignore" && !p.Default.Shadow {
-			return fmt.Errorf("Default effects must remain in shadow.")
+		for _, outcome := range outcomes {
+			if outcome.Outcome() == "ignore" || outcome.Shadow {
+				continue
+			}
+			if outcome.Notify == nil {
+				return fmt.Errorf("Actions and delegation must remain in shadow.")
+			}
+			if !allowLiveNotify {
+				return fmt.Errorf("Confirm live notifications explicitly, or keep notifications in shadow.")
+			}
+			if m.blocked.Load() {
+				return fmt.Errorf("The persistent safety stop blocks live notifications. This activation cannot remove it.")
+			}
+			if outcome.Notify.Via == "discord" {
+				webhook, err := m.discord.Resolve(outcome.Notify.WebhookEnv)
+				if err != nil {
+					return err
+				}
+				if err := notify.ValidateDiscordConnection(outcome.Notify.WebhookEnv, webhook); err != nil {
+					return err
+				}
+			}
 		}
 	}
 	if old := m.current.Load(); old != nil {
@@ -429,6 +452,13 @@ func (m *manager) activate(ctx context.Context, c *config.Config, text, base str
 				b.Priority = ""
 				a.Units = nil
 				b.Units = nil
+				// An omitted scope is the legacy system scope, not a new identity.
+				if a.Type == "systemd-journal" && a.Scope == "" {
+					a.Scope = "system"
+				}
+				if b.Type == "systemd-journal" && b.Scope == "" {
+					b.Scope = "system"
+				}
 				if !reflect.DeepEqual(a, b) {
 					return fmt.Errorf("A source identity or mapping changed. Use a new source name and explicitly accept a new cursor.")
 				}

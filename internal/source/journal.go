@@ -23,8 +23,8 @@ import (
 
 const journalBatchSize = 100
 
-// Journal selects local system-unit records. It owns no background process:
-// each bounded journalctl call is reaped before interpretation begins. Run's
+// Journal selects local records in a system or current-account scope. It owns
+// no background process: each bounded journalctl call is reaped before interpretation begins. Run's
 // caller owns the single polling goroutine and cancels it on every exit path.
 // No command, arguments, permissions, or cursor ever come from a model.
 type Journal struct {
@@ -181,7 +181,7 @@ func (j *Journal) batch(ctx context.Context, cursor string) ([]journalRecord, er
 	// could jump to the tail and lose a backlog larger than one batch.
 	// shortcut: scan 100 journal records/tick to preserve exact checkpoints;
 	// add indexed unit queries only if measured journal volume needs them.
-	records, err := j.read(ctx, "__CURSOR,__REALTIME_TIMESTAMP,_SYSTEMD_UNIT,_SYSTEMD_USER_UNIT,UNIT,_PID,PRIORITY,MESSAGE",
+	records, err := j.read(ctx, "__CURSOR,__REALTIME_TIMESTAMP,_SYSTEMD_UNIT,_SYSTEMD_USER_UNIT,UNIT,USER_UNIT,_UID,_EXE,_COMM,_BOOT_ID,_PID,PRIORITY,MESSAGE",
 		"--cursor="+cursor, "--lines=+"+strconv.Itoa(journalBatchSize+1))
 	if err != nil {
 		return nil, err
@@ -212,9 +212,14 @@ func (r journalRecord) cursor() (string, error) {
 }
 
 func (j *Journal) normalize(r journalRecord, cursor string) (event.Event, bool, error) {
-	// UID-split journal files can hold system services running as regular users.
-	// Select by trusted unit identity, but never ingest a user's own units.
-	if _, userUnit := r["_SYSTEMD_USER_UNIT"]; userUnit {
+	// Unit names are not unique across users or between system and user scopes.
+	// Journald supplies the trusted identity fields; MESSAGE cannot select scope.
+	_, hasUserUnit := r["_SYSTEMD_USER_UNIT"]
+	if j.cfg.Scope == "user" {
+		if !hasUserUnit || r.text("_UID") != strconv.Itoa(os.Getuid()) {
+			return event.Event{}, false, nil
+		}
+	} else if hasUserUnit || (j.cfg.Scope != "" && j.cfg.Scope != "system") {
 		return event.Event{}, false, nil
 	}
 	// A broad unit choice must not turn our own notifications/diagnostics
@@ -225,10 +230,17 @@ func (j *Journal) normalize(r journalRecord, cursor string) (event.Event, bool, 
 		return event.Event{}, false, nil
 	}
 	unit := r.text("_SYSTEMD_UNIT")
-	// Service state transitions are emitted by the system manager, not the
-	// service itself. Accept its UNIT field only from trusted PID 1; never
-	// treat a user unit's similarly named message as a system service event.
-	if r.text("_PID") == "1" && r.text("UNIT") != "" {
+	// Managers emit transitions outside the watched unit's cgroup. Only a
+	// trusted manager identity may select a unit from an entry's named fields.
+	if j.cfg.Scope == "user" {
+		unit = r.text("_SYSTEMD_USER_UNIT")
+		// User-manager lifecycle messages name USER_UNIT. Trust that field only
+		// from this account's systemd manager, never an application's payload.
+		if unit == "init.scope" && r.text("_COMM") == "systemd" &&
+			(r.text("_EXE") == "/usr/lib/systemd/systemd" || r.text("_EXE") == "/lib/systemd/systemd") && r.text("USER_UNIT") != "" {
+			unit = r.text("USER_UNIT")
+		}
+	} else if r.text("_PID") == "1" && r.text("UNIT") != "" {
 		unit = r.text("UNIT")
 	}
 	allowed := false
@@ -246,6 +258,9 @@ func (j *Journal) normalize(r journalRecord, cursor string) (event.Event, bool, 
 	}
 	message := r.text("MESSAGE")
 	data := map[string]any{"unit": unit, "priority": priority, "message": message}
+	if j.cfg.Scope == "user" {
+		data["scope"], data["uid"] = "user", os.Getuid()
+	}
 	// Default journalctl JSON omits large fields and represents binary ones
 	// as arrays. Record the omission rather than pretending an empty message
 	// was complete. Never request --all, which removes that upstream bound.
@@ -274,7 +289,7 @@ func (j *Journal) read(ctx context.Context, fields string, args ...string) ([]jo
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	// --system selects files, not unit ownership, and hides system services
-	// running under a regular UID. normalize enforces the system-unit boundary.
+	// running under a regular UID. normalize enforces unit scope and user ownership.
 	argv := append([]string{"--no-pager", "--output=json", "--output-fields=" + fields}, args...)
 	cmd := exec.CommandContext(ctx, j.path, argv...)
 	cmd.WaitDelay = time.Second

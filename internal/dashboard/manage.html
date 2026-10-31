@@ -245,8 +245,11 @@
               <fieldset data-setup-step="0">
                 <legend>Which service should mrmr watch?</legend>
                 <p>
-                  Choose exact Linux system units. User services, including
-                  user-run Hermes services, are not supported yet.
+                  Choose exact Linux units and their service scope. User
+                  services are limited to the runtime account. Scope is fixed
+                  after activation. Applications can write error text at info
+                  severity; choose info and higher when journald does not label
+                  their errors separately.
                 </p>
                 <div class="fields">
                   <label
@@ -256,11 +259,20 @@
                       placeholder="Plex"
                   /></label>
                   <label
-                    >System units, separated by commas<input
+                    >Units, separated by commas<input
                       id="setup-units"
                       required
                       placeholder="plexmediaserver.service"
                   /></label>
+                  <label
+                    >Service scope
+                    <select id="setup-scope">
+                      <option value="system">System service</option>
+                      <option value="user">
+                        User service (runtime account)
+                      </option>
+                    </select>
+                  </label>
                   <label
                     >Severity and higher
                     <select id="setup-priority">
@@ -361,9 +373,9 @@
               <fieldset data-setup-step="2" hidden>
                 <legend>Where should incident alerts go?</legend>
                 <p>
-                  Only incidents that need operator action qualify. New and
-                  edited monitors start in shadow: the intended notification is
-                  recorded, not sent.
+                  Only incidents that need operator action qualify. Choose live
+                  notifications to send alerts, or preview to record them
+                  without delivery.
                 </p>
                 <label
                   >Notification destination
@@ -372,6 +384,17 @@
                     <option value="stdout">Runtime log (stdout)</option>
                   </select>
                 </label>
+                <label
+                  >Notification mode
+                  <select id="setup-delivery">
+                    <option value="live">Send notifications</option>
+                    <option value="preview">Preview only — do not send</option>
+                  </select>
+                </label>
+                <p class="help">
+                  Live alerts can include false alarms or miss incidents. This
+                  enables notifications only, never commands or agents.
+                </p>
                 <div id="setup-discord">
                   <label
                     >Discord connection<select id="setup-webhook"></select
@@ -480,8 +503,9 @@
                 <label class="check"
                   ><input id="setup-confirm" type="checkbox" />I reviewed this
                   monitor’s model, collection scope, and replacement rules. I
-                  also reviewed any earlier draft changes. Apply the draft in
-                  shadow.</label
+                  also reviewed any earlier draft changes and authorize live
+                  notifications wherever this draft selects Send
+                  notifications.</label
                 >
                 <div class="row">
                   <button id="setup-back-notify" type="button">Back</button>
@@ -491,7 +515,7 @@
                     class="primary"
                     disabled
                   >
-                    Start in shadow
+                    Apply monitoring configuration
                   </button>
                 </div>
                 <p class="help">
@@ -578,9 +602,16 @@
                       required
                       value="30s" /></label
                   ><label
-                    >System units (comma-separated)<input
+                    >Units (comma-separated)<input
                       id="source-units"
                       placeholder="ssh.service, tailscaled.service" /></label
+                  ><label
+                    >Journal scope<select id="source-scope">
+                      <option value="system">System services</option>
+                      <option value="user">
+                        User services (runtime account)
+                      </option>
+                    </select></label
                   ><label
                     >Journal severity<select id="source-priority">
                       <option>warning</option>
@@ -605,9 +636,9 @@
                   /></label>
                 </div>
                 <p class="help">
-                  Journal collection supports system units only, not user
-                  services. A new journal identity starts at the current tail.
-                  HTTP cursor behavior depends on the configured endpoint.
+                  Journal scope selects system services or this runtime
+                  account’s user services. A new identity starts at the current
+                  tail. HTTP cursor behavior depends on the configured endpoint.
                 </p>
                 <button>Add / replace source in editor</button>
               </form>
@@ -685,8 +716,8 @@
             <p class="help">
               Only credential references belong here—never passwords, API keys,
               or webhook URLs. Listener and database changes require a process
-              restart. Management activation permits shadow effects and ignore
-              only.
+              restart. Management permits explicitly confirmed live
+              notifications. Actions and delegation must remain in shadow.
             </p>
             <div class="row">
               <button id="validate">Validate</button>
@@ -700,9 +731,10 @@
             <label class="check"
               ><input id="apply-confirm" type="checkbox" />I reviewed the
               difference, selected sources, model destinations, and cursor
-              behavior. Activate this saved draft in shadow.</label
+              behavior. I authorize live notifications configured in this saved
+              draft. Actions and delegation remain in shadow.</label
             ><button id="activate" class="primary">
-              Apply saved configuration in shadow
+              Apply saved configuration
             </button>
             <h2>Revision history and recovery</h2>
             <p>

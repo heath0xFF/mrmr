@@ -32,6 +32,7 @@ type sourceView struct {
 	Type      string             `json:"type"`
 	EventType string             `json:"event_type"`
 	EveryMs   int64              `json:"every_ms"`
+	Scope     string             `json:"scope"`
 	Units     []string           `json:"units"`
 	Priority  string             `json:"priority"`
 	Health    runtime.PollHealth `json:"health"`
@@ -191,7 +192,7 @@ func New(rt *runtime.Runtime, cfg *config.Config) http.Handler {
 			summary, err := rt.DB.DashboardSummary(ctx)
 			sources := []sourceView{}
 			for _, s := range cfg.Sources {
-				sources = append(sources, sourceView{s.Name, s.Type, s.EventType, s.Every.Milliseconds(), s.Units, s.Priority, rt.PollHealth(s.Name), s.Paused})
+				sources = append(sources, sourceView{s.Name, s.Type, s.EventType, s.Every.Milliseconds(), s.Scope, s.Units, s.Priority, rt.PollHealth(s.Name), s.Paused})
 			}
 			send(map[string]any{"at": time.Now().UTC(), "started_at": started, "hostname": hostname, "summary": summary, "sources": sources, "policy": rules, "filter_count": len(cfg.Filter), "models": models, "interpreter": cfg.Interpret.Model, "interpret_overrides": overrides, "monitor_interpreters": monitorInterpreters, "config_revision": rt.ConfigRevision, "effects_blocked": rt.EffectsBlocked != nil && rt.EffectsBlocked()}, err)
 		case "/dashboard/api/events":

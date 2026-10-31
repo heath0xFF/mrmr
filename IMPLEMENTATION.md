@@ -608,7 +608,7 @@ default:
 Shadow mode is how a new flow earns trust: run it for a week against real
 events, compare recorded outcomes against what you would have done manually,
 tune filters/policy thresholds, then separately review whether live effects are
-justified. The management UI currently accepts shadow or ignore on activation;
+justified. The management UI accepts preview or explicitly confirmed live notifications on activation;
 it cannot promote rules live. Its separate persistent safety gate suppresses
 effects from older in-flight work too and has no browser removal control.
 
@@ -1058,7 +1058,7 @@ method restrictions; the management listener does not expose event ingestion.
 
 Operators can edit supported configuration through model/source/basic-policy
 forms and YAML, validate and save a revision-checked draft, compare it with the active file, and
-activate shadow-only changes. Activation prepares sources, drains current polls,
+activate changes with explicit live-notification consent. Actions and delegation remain shadow-only. Activation prepares sources, drains current polls,
 atomically replaces the startup YAML, and publishes an immutable runtime snapshot.
 In-flight HTTP events retain their original snapshot. Shutdown joins HTTP handlers
 before closing storage; file-backed runtimes hold a database ownership lock.
@@ -1086,6 +1086,20 @@ change. Configuration validation, secret redaction, and the activation safety ga
 cover all monitor entries, including paused sources. No database migration is added;
 old binaries require configuration without the new `monitors` field.
 
+At operator request, notifications no longer require a shadow-only rollout. The
+activation API requires both `confirm` and `allow_live_notify` for live stdout or
+Discord rules, including defaults and paused monitors. Discord credentials must
+resolve and pass the fixed-host validator. HTTP actions, emitted events, and agents
+remain shadow-only; activation cannot lift the global safety stop. The guide
+preserves an existing delivery mode and offers Send notifications or Preview only.
+This is an operator-authorized notification trial, not a measured quality claim.
+
+Journal sources accept `scope: system` (the default) or `scope: user`. User scope
+is limited to the runtime account through trusted journal UID and unit fields.
+Standard systemd user-manager lifecycle messages are included. Both scopes keep
+the existing bounded global scan and cursor behavior; changing a persisted source's
+scope requires a new name. Older binaries do not understand the scope field.
+
 The guided setup adds an explicit, source-selected, bounded synthetic interpreter-and-policy test. It sends
 no stored Events, reads no source, and runs no adapter. Test results are tied to
 the editor contents and never grant live authority. Paused sources retain their
@@ -1112,7 +1126,7 @@ Stored connections override matching environment references at dispatch, includi
 in-flight work. Unreadable stores fail closed. Enrollment changes no policy and
 sends no test message; existing live rules may use the saved destination immediately.
 The visible Save configuration toolbar saves drafts without activation; Review and
-apply leads to the existing shadow-only confirmation. Credential and draft saves
+apply leads to a separate confirmation of collection and notification delivery. Credential and draft saves
 are separate operations, with separate results. Management uses a separate
 loopback listener, an environment-provisioned token, explicit JSON writes, and
 Host/Origin checks; it does not authenticate the ordinary ingestion endpoint.
@@ -1124,7 +1138,7 @@ retains existing data without inventing missing origin or historical contracts.
 Opening the database through CLI commands also applies migrations. Database backup
 and binary compatibility are separate from configuration revision recovery.
 
-Still not implemented: browser live promotion or lifting the global safety gate,
+Still not implemented: browser live actions/delegation or lifting the global safety gate,
 effect approvals, independent Flows, reusable dataset selection/version tools,
 full comparison analysis, and source preview/delivery tests. The management UI is
 not an operating-system service manager. See README for access and recovery limits.

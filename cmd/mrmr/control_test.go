@@ -174,7 +174,7 @@ func TestManagementInvalidDraftAndUnsafeChanges(t *testing.T) {
 	for _, text := range []string{"not: [yaml", controlYAML + "\n---\nignored: document", strings.Replace(controlYAML, "ignore: true", "notify:\n    via: stdout", 1), strings.Replace(controlYAML, "127.0.0.1:4242", "0.0.0.0:8000", 1)} {
 		c, err := managedParse(text)
 		if err == nil {
-			err = m.activate(context.Background(), c, text, m.activeRevision())
+			err = m.activate(context.Background(), c, text, m.activeRevision(), false)
 		}
 		if err == nil {
 			t.Fatalf("unsafe config accepted: %s", text)
