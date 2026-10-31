@@ -1,0 +1,19 @@
+i've been using gpt-6-astra to make a management dashboard for this project, and i thikn the UI/UX sucks. 
+
+can you take a look and use impeccable to improve it?
+
+---
+
+ok push this, and then deploy it to the existing running instance on marvin
+
+---
+
+what's the new url
+
+---
+
+i thought it was up via tailscale serve?
+
+---
+
+this fucking operator token. get that shit outta here i'm so sick of it.
