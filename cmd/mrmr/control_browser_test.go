@@ -23,6 +23,8 @@ func TestManagementBrowser(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Setenv("MRMR_DISCORD_WEBHOOK_URL", "")
+	t.Setenv("MRMR_BROWSER_MISSING_CREDENTIAL", "")
 	m := testManager(t)
 	controlEvent(t, m)
 	if _, err = m.db.Exec(`UPDATE events SET data=json_set(data,'$.message','<img src=x onerror="window.mrmrInjected=true">') WHERE id='evt_review'`); err != nil {

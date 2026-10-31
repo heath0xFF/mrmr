@@ -29,6 +29,7 @@ import (
 	"github.com/heath0xff/mrmr/internal/dashboard"
 	"github.com/heath0xff/mrmr/internal/event"
 	"github.com/heath0xff/mrmr/internal/model"
+	"github.com/heath0xff/mrmr/internal/notify"
 	"github.com/heath0xff/mrmr/internal/runtime"
 	"github.com/heath0xff/mrmr/internal/source"
 	"github.com/heath0xff/mrmr/internal/storage"
@@ -124,21 +125,23 @@ func run(args []string) error {
 		return err
 	}
 
+	credentials := notify.DefaultDiscordCredentials()
 	rt := &runtime.Runtime{
-		EffectsBlocked:  func() bool { return blocked },
-		DB:              db,
-		Client:          &model.Client{},
-		ModelCfg:        cfg.Models[cfg.Interpret.Model],
-		ModelKey:        cfg.Interpret.Model,
-		Prompt:          cfg.Interpret.Prompt,
-		Schema:          cfg.Interpret.Schema,
-		Questions:       cfg.Interpret.Questions,
-		Policy:          cfg.Policy,
-		Filters:         cfg.Filter,
-		Agents:          cfg.Agents,
-		Models:          cfg.Models,
-		InterpretByType: cfg.InterpretByType,
-		Monitors:        cfg.Monitors,
+		DiscordCredentials: credentials,
+		EffectsBlocked:     func() bool { return blocked },
+		DB:                 db,
+		Client:             &model.Client{},
+		ModelCfg:           cfg.Models[cfg.Interpret.Model],
+		ModelKey:           cfg.Interpret.Model,
+		Prompt:             cfg.Interpret.Prompt,
+		Schema:             cfg.Interpret.Schema,
+		Questions:          cfg.Interpret.Questions,
+		Policy:             cfg.Policy,
+		Filters:            cfg.Filter,
+		Agents:             cfg.Agents,
+		Models:             cfg.Models,
+		InterpretByType:    cfg.InterpretByType,
+		Monitors:           cfg.Monitors,
 	}
 
 	mux := http.NewServeMux()

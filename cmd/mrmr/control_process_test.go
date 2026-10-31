@@ -65,7 +65,7 @@ func TestManagedProcessDrainsHTTPBeforeClosingStorage(t *testing.T) {
 		t.Fatal(err)
 	}
 	child := exec.Command(os.Args[0], "-test.run=^TestManagedProcessHelper$", "-test.timeout=20s")
-	child.Env = append(os.Environ(), "MRMR_TEST_MANAGED_CHILD=1", "MRMR_TEST_CONFIG="+configPath, "MRMR_TEST_ADDR="+controlAddr, "MRMR_TEST_CONTROL_TOKEN="+testControlToken)
+	child.Env = append(os.Environ(), "HOME="+dir, "XDG_CONFIG_HOME="+dir, "MRMR_TEST_MANAGED_CHILD=1", "MRMR_TEST_CONFIG="+configPath, "MRMR_TEST_ADDR="+controlAddr, "MRMR_TEST_CONTROL_TOKEN="+testControlToken)
 	var output bytes.Buffer
 	child.Stdout = &output
 	child.Stderr = &output

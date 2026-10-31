@@ -77,10 +77,16 @@ func (m *manager) activeRevision() string {
 
 // Management refuses literal credentials instead of trying to round-trip a
 // redacted file. Endpoint locations are configuration; secret values belong
-// in environment variables provisioned outside the browser.
+// in environment variables or the private Discord credential store.
 var inlineSecret = regexp.MustCompile(`(?i)(bearer\s+\S+|(?:token|password|secret|api[_-]?key)\s*[=:]\s*[^\s,;"']+)`)
 
+var discordSecretURL = regexp.MustCompile(`(?i)https://discord\.com/api(?:/v[0-9]+)?/webhooks/`)
+
 func managementSafe(b []byte) error {
+	// Scan comments too; decoded values are checked below for YAML escapes.
+	if discordSecretURL.Match(b) {
+		return fmt.Errorf("Use a Discord connection reference, not a webhook URL in configuration.")
+	}
 	if len(b) > 256<<10 {
 		return fmt.Errorf("Configuration exceeds 256 KiB.")
 	}
@@ -93,6 +99,9 @@ func managementSafe(b []byte) error {
 		switch v := v.(type) {
 		case map[string]any:
 			for k, x := range v {
+				if err := walk(k); err != nil {
+					return err
+				}
 				l := strings.ToLower(k)
 				if l == "token" || l == "password" || l == "secret" || l == "api_key" || l == "authorization" || l == "webhook_url" {
 					return fmt.Errorf("Inline credentials are not allowed; use environment references.")
@@ -108,6 +117,9 @@ func managementSafe(b []byte) error {
 				}
 			}
 		case string:
+			if discordSecretURL.MatchString(v) {
+				return fmt.Errorf("Use a Discord connection reference, not a webhook URL in configuration.")
+			}
 			if inlineSecret.MatchString(v) {
 				return fmt.Errorf("Possible inline credential detected; use environment references.")
 			}
@@ -200,6 +212,7 @@ func (m *manager) route(w http.ResponseWriter, r *http.Request) error {
 			yaml.Unmarshal([]byte(active), &doc)
 		}
 		connections := []map[string]string{}
+		discordRefs := []string{"MRMR_DISCORD_WEBHOOK_URL"}
 		credential := func(name string) string {
 			if name == "" {
 				return "not required"
@@ -223,7 +236,7 @@ func (m *manager) route(w http.ResponseWriter, r *http.Request) error {
 				for _, outcome := range outcomes {
 					if n := outcome.Notify; n != nil && n.Via == "discord" && !seen[n.WebhookEnv] {
 						seen[n.WebhookEnv] = true
-						connections = append(connections, map[string]string{"name": n.WebhookEnv, "kind": "Discord", "credential": credential(n.WebhookEnv)})
+						discordRefs = append(discordRefs, n.WebhookEnv)
 					}
 				}
 			}
@@ -233,7 +246,20 @@ func (m *manager) route(w http.ResponseWriter, r *http.Request) error {
 				}
 			}
 		}
+		discord, err := m.discord.Connections(discordRefs)
+		if err != nil {
+			return err
+		}
+		for _, c := range discord {
+			status := "missing"
+			if c.Configured {
+				status = "configured (not tested)"
+			}
+			connections = append(connections, map[string]string{"name": c.Name, "kind": "Discord", "credential": status, "revision": c.Revision})
+		}
 		return controlJSON(w, map[string]any{"connections": connections, "active": active, "revision": m.activeRevision(), "draft": draft, "history": history, "document": doc, "setup": m.current.Load() == nil, "shadow_override": m.blocked.Load(), "bootstrap": map[string]any{"Server": m.bootstrap.Server, "DB": m.bootstrap.DB}})
+	case r.Method == "POST" && r.URL.Path == "/manage/api/discord":
+		return m.saveDiscord(w, r)
 	case r.Method == "GET" && r.URL.Path == "/manage/api/revision":
 		var text string
 		if err := m.db.QueryRow(`SELECT yaml FROM control_revisions WHERE id=?`, r.URL.Query().Get("id")).Scan(&text); err != nil {

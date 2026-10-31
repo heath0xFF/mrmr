@@ -296,7 +296,9 @@ func shortenMessages(value any) {
 	}
 }
 
-var privateURL = regexp.MustCompile(`https?://[^\s<>"']+`)
+// URL schemes are case-insensitive. This also covers newly enrolled webhooks
+// that were not present in the immutable environment-secret snapshot above.
+var privateURL = regexp.MustCompile(`(?i)https?://[^\s<>"']+`)
 var privateField = regexp.MustCompile(`(?i)(bearer\s+|(?:token|password|secret|api[_-]?key)\s*[=:]\s*)[^\s,;"']+`)
 
 // Redaction is defense in depth, not a promise that arbitrary event text is

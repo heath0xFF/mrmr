@@ -657,8 +657,9 @@ Policy may constrain `event.type`, `source`, `subject`, `depth`, and `data` alon
 normalized judgments. URLs, methods, permissions, adapters, and tool names are
 never selected from model output. HTTP effects reject redirects.
 
-Notifications support stdout and Discord. Discord resolves a literal environment
-reference only after durable intent and the shadow gate. It accepts a fixed
+Notifications support stdout and Discord. Discord resolves a literal connection
+reference from the private credential store, or the environment if no stored value
+exists, only after durable intent and the shadow gate. It accepts a fixed
 HTTPS Discord webhook, confirms creation, disables mentions/link previews, bounds
 message size and request time, and makes no application retries. Its credential
 URL and response body never enter errors or traces.
@@ -1102,7 +1103,17 @@ restart rather than replayed. No evaluation automatically grants live authority.
 `-setup` starts protected setup when the configuration file is absent, with no
 sources and event ingestion rejected until activation. It binds ingestion only
 to `127.0.0.1:4242` during setup and does not silently replace an invalid existing
-file. Secret provisioning remains outside the browser. Management uses a separate
+file. Model/operator secret provisioning remains outside the browser. Discord
+URLs can be enrolled through a dedicated authenticated, confirmed JSON route over
+private HTTPS or loopback. They are validated against the sender's fixed Discord
+boundary, stored outside YAML/SQLite in private per-account files, and never returned
+or audited as values. Saves use file locking, revision checks, and atomic replacement.
+Stored connections override matching environment references at dispatch, including
+in-flight work. Unreadable stores fail closed. Enrollment changes no policy and
+sends no test message; existing live rules may use the saved destination immediately.
+The visible Save configuration toolbar saves drafts without activation; Review and
+apply leads to the existing shadow-only confirmation. Credential and draft saves
+are separate operations, with separate results. Management uses a separate
 loopback listener, an environment-provisioned token, explicit JSON writes, and
 Host/Origin checks; it does not authenticate the ordinary ingestion endpoint.
 

@@ -469,9 +469,45 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
     );
     await evaluate("document.getElementById('setup-next-model').click()");
     await until("!document.querySelector('[data-setup-step=\"2\"]').hidden");
-    await evaluate(
-      "document.getElementById('setup-notify').value='stdout';document.getElementById('setup-notify').dispatchEvent(new Event('change'));document.getElementById('setup-next-notify').click()",
+    // Save is available in the guide before testing or activation. Credential
+    // enrollment and draft persistence must not start the third source.
+    await evaluate(`window.beforeSaveActive=state.config.active;
+      document.getElementById('setup-webhook').value='';
+      document.getElementById('setup-webhook').dispatchEvent(new Event('change'));
+      document.getElementById('setup-webhook-env').value='browser_alerts';
+      document.getElementById('setup-webhook-env').dispatchEvent(new Event('input',{bubbles:true}));
+      document.getElementById('setup-webhook-url').value='https://discord.com/api/webhooks/123/synthetic_browser_credential';
+      document.getElementById('setup-webhook-confirm').checked=true;
+      document.getElementById('save-draft').click();`);
+    await until(
+      "!state.configBusy && !state.dirty && state.config.draft.yaml.includes('third-monitor')",
     );
+    assert.ok(
+      await evaluate(`document.getElementById('save-draft').checkVisibility()
+      && document.getElementById('save-draft').textContent.trim()==='Save configuration'
+      && document.getElementById('config-state').textContent.includes('Saved draft')
+      && document.getElementById('setup-webhook-url').value===''
+      && !document.getElementById('setup-webhook-confirm').checked
+      && state.config.active===window.beforeSaveActive
+      && !document.getElementById('yaml').value.includes('synthetic_browser_credential')
+      && !JSON.stringify(state.config).includes('synthetic_browser_credential')
+      && state.config.connections.some(c=>c.name==='browser_alerts' && c.credential.startsWith('configured'))
+      && localStorage.length===0 && sessionStorage.length===0
+      && document.getElementById('setup-start').disabled`),
+    );
+    // A rejected URL is cleared too. The last valid stored connection survives.
+    await evaluate(`document.getElementById('setup-webhook-url').value='https://evil.invalid/synthetic_invalid_credential';
+      document.getElementById('setup-webhook-confirm').checked=true;
+      document.getElementById('setup-save-discord').click();`);
+    await until(
+      "!state.configBusy && document.getElementById('setup-webhook-result').textContent.includes('Save not confirmed')",
+    );
+    assert.ok(
+      await evaluate(
+        "document.getElementById('setup-webhook-url').value==='' && !document.getElementById('notice').textContent.includes('synthetic_invalid_credential')",
+      ),
+    );
+    await evaluate("document.getElementById('review-config').click()");
     await until("!document.querySelector('[data-setup-step=\"3\"]').hidden");
     assert.ok(
       await evaluate(`(async()=>{
@@ -568,12 +604,16 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
     );
     await until("typeof window.releasePrivateBody==='function'");
     await evaluate(
-      "document.getElementById('logout').click();window.releasePrivateBody()",
+      "document.getElementById('setup-webhook-url').value='https://discord.com/api/webhooks/123/unsaved_synthetic_credential';document.getElementById('logout').click();window.releasePrivateBody()",
     );
     await until(
       "document.getElementById('notice').textContent.includes('session changed')",
     );
     assert.equal(await evaluate("document.getElementById('yaml').value"), "");
+    assert.equal(
+      await evaluate("document.getElementById('setup-webhook-url').value"),
+      "",
+    );
     assert.equal(
       await evaluate("document.getElementById('event-detail').textContent"),
       "",
@@ -590,6 +630,6 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
     await fs.rm(profile, { recursive: true, force: true });
   }
 })().catch((err) => {
-  console.error(err.message);
+  console.error(err.stack || err.message);
   process.exitCode = 1;
 });

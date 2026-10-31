@@ -29,7 +29,7 @@ function configView(view) {
   $("config-description").textContent =
     view === "current"
       ? "The monitoring services in the active revision. Draft changes are not running."
-      : "Nothing changes until activation. New and edited effects must remain in shadow.";
+      : "Save monitor edits as a draft, then Apply to run them in shadow. Connection saves take effect immediately.";
 }
 function renderMonitors() {
   const doc = state.config.document;

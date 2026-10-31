@@ -17,13 +17,23 @@ import (
 
 var webhookPath = regexp.MustCompile(`^/api(?:/v10)?/webhooks/[0-9]+/[A-Za-z0-9_-]+$`)
 
-// Discord sends one message to an environment-resolved webhook. Neither the
-// credential-bearing URL nor Discord's response body may reach errors or traces.
-func Discord(ctx context.Context, client *http.Client, webhook, message string) error {
+// Enrollment and dispatch use the same destination boundary. Validation makes
+// no network request and must never return the credential-bearing URL in errors.
+func discordURL(webhook string) (*url.URL, error) {
 	u, err := url.Parse(webhook)
-	if err != nil || u.Scheme != "https" || u.Host != "discord.com" || u.User != nil ||
+	if err != nil || len(webhook) > 4096 || u.Scheme != "https" || u.Host != "discord.com" || u.User != nil ||
 		u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.RawPath != "" || !webhookPath.MatchString(u.Path) {
-		return fmt.Errorf("discord: missing or invalid webhook secret")
+		return nil, fmt.Errorf("discord: missing or invalid webhook secret")
+	}
+	return u, nil
+}
+
+// Discord sends one message to a resolved webhook. Neither the credential-bearing
+// URL nor Discord's response body may reach errors or traces.
+func Discord(ctx context.Context, client *http.Client, webhook, message string) error {
+	u, err := discordURL(webhook)
+	if err != nil {
+		return err
 	}
 	if strings.TrimSpace(message) == "" {
 		return fmt.Errorf("discord: notification message is empty")

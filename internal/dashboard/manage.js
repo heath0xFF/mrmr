@@ -522,13 +522,12 @@ function renderConfigRevision() {
   if (!data) return;
   const pending = data.draft.yaml && data.draft.yaml !== data.active;
   $("config-state").textContent =
-    `Active revision: ${data.revision.slice(0, 12) || "not activated"} · ${state.dirty ? "Unsaved editor changes" : pending ? "Saved draft is not active" : "No pending saved draft"}${pending && data.draft.base !== data.revision ? " · Draft was based on an older revision; rebase explicitly" : ""}`;
+    `${state.dirty ? "Unsaved changes" : pending ? "Saved draft · Not applied" : data.setup ? "Not configured" : "Active · No pending changes"}${pending && data.draft.base !== data.revision ? " · Based on an older revision; reload and review before applying" : ""}`;
+  $("config-state").title = `Active revision: ${data.revision}`;
 }
-async function loadConfig() {
-  const data = await api("/manage/api/state");
-  state.config = data;
+function renderConnections() {
   $("connections").replaceChildren();
-  for (const connection of (data.connections || []).sort((a, b) =>
+  for (const connection of (state.config.connections || []).sort((a, b) =>
     a.name.localeCompare(b.name),
   )) {
     $("connections").append(
@@ -538,6 +537,11 @@ async function loadConfig() {
       ),
     );
   }
+}
+async function loadConfig() {
+  const data = await api("/manage/api/state");
+  state.config = data;
+  renderConnections();
   $("yaml").value = data.draft.yaml || data.active || template(data.bootstrap);
   state.dirty = false;
   $("apply-confirm").checked = false;
@@ -584,7 +588,7 @@ function changed() {
 }
 $("yaml").addEventListener("input", changed);
 window.addEventListener("beforeunload", (e) => {
-  if (state.dirty) {
+  if (state.dirty || $("setup-webhook-url").value) {
     e.preventDefault();
     e.returnValue = "";
   }
@@ -626,7 +630,38 @@ async function saveDraft() {
   notice("Draft saved. Running configuration is unchanged.");
   $("validation").textContent = `Saved draft ${d.revision.slice(0, 12)}.`;
 }
-action("save-draft", saveDraft);
+action("save-draft", async () => {
+  const guide = !$("setup-guide").hidden;
+  if (guide && setupState.dirty)
+    for (let step = 0; step < 3; step++) if (!validSetupStep(step)) return;
+  $("config-state").textContent = "Saving configuration…";
+  try {
+    await configurationTask(async () => {
+      if (
+        guide &&
+        $("setup-notify").value === "discord" &&
+        $("setup-webhook-url").value
+      )
+        await saveDiscordConnection();
+      if (guide && setupState.dirty) await buildSetup();
+      await saveDraft();
+    });
+  } catch (error) {
+    renderConfigRevision();
+    $("config-state").textContent +=
+      " · Save not confirmed; reload saved state before retrying.";
+    throw error;
+  }
+});
+action("review-config", async () => {
+  if (!$("setup-guide").hidden) {
+    await reviewSetup();
+    return;
+  }
+  configView("advanced");
+  diff();
+  $("apply-confirm").focus();
+});
 function diff() {
   const old = (state.config.active || "").split("\n"),
     candidate = $("yaml").value.split("\n");
@@ -684,7 +719,10 @@ async function configurationTask(fn) {
       c.disabled = disabled;
     });
     state.configBusy--;
-    if (!state.configBusy) $("setup-form").removeAttribute("aria-busy");
+    if (!state.configBusy) {
+      $("setup-form").removeAttribute("aria-busy");
+      if (setupState.base) notificationFields();
+    }
     refreshSetupStart();
   }
 }

@@ -193,7 +193,19 @@
               <button id="reload-config">Reload saved state</button>
             </div>
           </div>
-          <p id="config-state" class="help"></p>
+          <div class="config-actions" aria-label="Configuration actions">
+            <div class="row">
+              <button id="save-draft" class="primary">
+                Save configuration
+              </button>
+              <button id="review-config">Review and apply</button>
+            </div>
+            <p id="config-state" class="help" role="status"></p>
+            <p class="help">
+              Save keeps monitor edits as a draft. Apply changes collection and
+              rules.
+            </p>
+          </div>
           <p id="setup-note" class="warning" hidden>
             First-run setup: collection and effects are disabled until a valid
             configuration is activated. Set a real model endpoint before
@@ -336,7 +348,7 @@
                   <p id="setup-credential-help" class="help">
                     Enter a variable name, never the key itself. Provision the
                     key in the runtime service environment and restart mrmr. The
-                    browser cannot install credentials.
+                    browser cannot install model credentials.
                   </p>
                 </div>
                 <div class="row">
@@ -365,21 +377,48 @@
                     >Discord connection<select id="setup-webhook"></select
                   ></label>
                   <label id="setup-webhook-new"
-                    >Credential environment variable
+                    >Connection name
                     <input
                       id="setup-webhook-env"
                       required
+                      maxlength="64"
                       pattern="[A-Za-z_][A-Za-z0-9_]*"
-                      placeholder="MRMR_DISCORD_WEBHOOK_URL"
+                      placeholder="home_alerts"
                       autocomplete="off"
                     />
                   </label>
-                  <p id="setup-discord-status" class="help"></p>
+                  <p id="setup-discord-status" class="help" role="status"></p>
+                  <label for="setup-webhook-url">Webhook URL</label>
+                  <input
+                    id="setup-webhook-url"
+                    type="password"
+                    autocomplete="new-password"
+                    spellcheck="false"
+                    autocapitalize="none"
+                    inputmode="url"
+                    maxlength="4096"
+                    aria-describedby="setup-webhook-help"
+                    placeholder="Paste a Discord webhook URL"
+                  />
+                  <p id="setup-webhook-help" class="help">
+                    Paste once, then save. Stored privately on the runtime host,
+                    never in configuration YAML. Leave blank to keep the saved
+                    URL.
+                  </p>
+                  <label class="check"
+                    ><input id="setup-webhook-confirm" type="checkbox" />
+                    Save this destination for every monitor using this
+                    connection. Existing live rules use it immediately; shadow
+                    rules stay in shadow.
+                  </label>
+                  <button id="setup-save-discord" type="button">
+                    Save Discord connection
+                  </button>
+                  <p id="setup-webhook-result" class="help" role="status"></p>
                   <p class="help">
-                    Each webhook sends to one Discord channel. Choose a stored
-                    reference, never paste a webhook URL here. Alerts contain
-                    the service, source, and Event ID—not private journal text.
-                    Delivery is not tested by the model check.
+                    No message is sent by saving. Alerts contain the service,
+                    source, and Event ID—not private journal text. Delivery is
+                    not tested by the model check.
                   </p>
                 </div>
                 <div id="setup-thresholds" class="fields">
@@ -624,8 +663,8 @@
             <button id="shadow-draft">Set all draft effects to shadow</button>
             <h2>Active connection references</h2>
             <p class="help">
-              Environment presence only. No external connection test is made,
-              and secret values never leave the runtime.
+              Credential presence only. No external connection test is made, and
+              secret values never leave the runtime.
             </p>
             <div id="connections"></div>
             <h2>Sources in this draft</h2>
@@ -644,15 +683,14 @@
               autocomplete="off"
             ></textarea>
             <p class="help">
-              Only environment references belong here—never passwords, API keys,
+              Only credential references belong here—never passwords, API keys,
               or webhook URLs. Listener and database changes require a process
               restart. Management activation permits shadow effects and ignore
               only.
             </p>
             <div class="row">
-              <button id="validate">Validate</button
-              ><button id="save-draft">Save draft</button
-              ><button id="show-diff">Review difference</button>
+              <button id="validate">Validate</button>
+              <button id="show-diff">Review difference</button>
             </div>
             <div id="validation" role="status"></div>
             <details id="diff">
@@ -663,7 +701,9 @@
               ><input id="apply-confirm" type="checkbox" />I reviewed the
               difference, selected sources, model destinations, and cursor
               behavior. Activate this saved draft in shadow.</label
-            ><button id="activate" class="primary">Activate saved draft</button>
+            ><button id="activate" class="primary">
+              Apply saved configuration in shadow
+            </button>
             <h2>Revision history and recovery</h2>
             <p>
               Restore loads an earlier revision into the editor. Review, save,

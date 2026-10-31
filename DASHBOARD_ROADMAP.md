@@ -20,6 +20,9 @@ provides Overview, Activity, Review, Configure, and Runtime in one binary:
 - Shadow-only activation, retained source cursors, source pause/resume through
   configuration, prior-revision recovery, and a persistent return-to-shadow gate.
 - Protected first-run setup with collection disabled until activation.
+- Visible Save configuration and Review and apply controls, with separate draft
+  and active states. Discord webhook enrollment uses authenticated writes to a
+  private credential store; values never enter configuration history or responses.
 - Current configuration lists active monitors separately from drafts. Add/edit
   system-service workflows reuse model connections and select source-local
   questions/policy plus Discord or stdout notifications. A bounded two-example
@@ -398,9 +401,10 @@ bound ingestion server is started.
   steps. A connection check can contact an external service even if it writes
   nothing locally. A delivery test is a real effect and must be labeled as such.
 - Manage Connections by reference, required scopes, configured/missing state,
-  and last check. Never return stored secret values to the browser. Initially
-  provision secrets through the existing approved environment/store; a separate
-  design is required for browser credential enrollment.
+  and last check. Never return stored secret values to the browser. Discord now
+  has narrow, confirmed webhook enrollment into private per-account files with
+  fixed-host validation and revision checks. Other credentials still use the
+  existing approved environment/store; broader enrollment remains separate work.
 - Carry new source scope into Activity and Review. New coverage must earn its
   own evidence; success on a journal dataset does not validate an email flow.
 - Add pause/resume for supported sources with explicit cursor behavior. Pausing

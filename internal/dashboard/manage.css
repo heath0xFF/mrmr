@@ -86,6 +86,31 @@ p {
   max-width: 74ch;
   margin: 0 0 14px;
 }
+/* Keep Save within reach while editing long forms, without covering the focused
+   field when the browser scrolls to a validation error or keyboard target. */
+.config-actions {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: 12px 0;
+  margin-bottom: 20px;
+  background: #fff;
+  border-bottom: 1px solid var(--line);
+}
+.config-actions .row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  max-width: 430px;
+}
+.config-actions p {
+  margin: 6px 0 0;
+}
+[data-page="configure"] input,
+[data-page="configure"] select,
+[data-page="configure"] button,
+[data-page="configure"] legend {
+  scroll-margin-top: 180px;
+}
 button,
 input,
 select,

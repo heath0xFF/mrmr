@@ -12,6 +12,7 @@ import (
 	"github.com/heath0xff/mrmr/internal/config"
 	"github.com/heath0xff/mrmr/internal/event"
 	"github.com/heath0xff/mrmr/internal/model"
+	"github.com/heath0xff/mrmr/internal/notify"
 	"github.com/heath0xff/mrmr/internal/policy"
 	"github.com/heath0xff/mrmr/internal/runtime"
 	"github.com/heath0xff/mrmr/internal/storage"
@@ -87,6 +88,24 @@ func TestDashboardLocalReadOnlyAndRedaction(t *testing.T) {
 	w = request(h, "HEAD", "/dashboard/api/overview")
 	if w.Code != 200 || w.Body.Len() != 0 {
 		t.Fatal("HEAD should not return data")
+	}
+}
+
+func TestDashboardRedactsNewlyStoredDiscordURLs(t *testing.T) {
+	h, rt := testDashboard(t)
+	store := &notify.DiscordCredentials{Dir: filepath.Join(t.TempDir(), "discord")}
+	const webhook = "HTTPS://discord.com/api/v10/webhooks/123/new_synthetic_credential"
+	if _, err := store.Save("alerts", webhook, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rt.DB.Exec(`UPDATE events SET data=json_set(data,'$.message',?)`, "A prefix "+webhook); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/dashboard/api/events", "/dashboard/api/event?id=evt_test"} {
+		w := request(h, "GET", path)
+		if w.Code != 200 || strings.Contains(w.Body.String(), "new_synthetic_credential") {
+			t.Fatal("newly stored URL leaked through the dashboard")
+		}
 	}
 }
 

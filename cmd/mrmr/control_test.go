@@ -14,6 +14,7 @@ import (
 
 	"github.com/heath0xff/mrmr/internal/config"
 	"github.com/heath0xff/mrmr/internal/event"
+	"github.com/heath0xff/mrmr/internal/notify"
 	"github.com/heath0xff/mrmr/internal/storage"
 )
 
@@ -56,7 +57,7 @@ func testManager(t *testing.T) *manager {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := &manager{ctx: ctx, db: db, path: path, bootstrap: cfg, token: sha256.Sum256([]byte(testControlToken))}
+	m := &manager{ctx: ctx, db: db, path: path, bootstrap: cfg, discord: &notify.DiscordCredentials{Dir: filepath.Join(t.TempDir(), "discord")}, token: sha256.Sum256([]byte(testControlToken))}
 	m.current.Store(m.snapshot(cfg, controlYAML))
 	if _, err = db.Exec(`INSERT INTO control_revisions VALUES(?,?,?,'active','')`, revision(controlYAML), controlYAML, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
 		t.Fatal(err)

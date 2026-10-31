@@ -24,7 +24,7 @@ Ask only for missing information:
 1. **What should mrmr watch?** Start with a synthetic API event if the source is not decided.
 2. **Which decision model should it use?** Confirm an OpenAI-compatible endpoint/model, TypeSafe Jev, or a verified local System One/d1 endpoint, and authorization to send data there. Use `role: decision`; hosted endpoints may incur charges and receive private event content. A worker model is a separate `role: agent` endpoint hint for an external agent harness.
 3. **Where should the installation and data live?** Default to a user-owned local directory, not a system-wide installation.
-4. **What should happen when something matters?** Record the eventual goal, but keep effects disabled during setup. Stdout and Discord notifications are built in. Discord uses a private environment-variable reference for its webhook; never put the URL in YAML or Git.
+4. **What should happen when something matters?** Record the eventual goal, but keep effects disabled during setup. Stdout and Discord notifications are built in. Discord uses a named private connection or environment reference; never put its URL in YAML or Git.
 5. **Does the user want browser management?** Confirm the loopback control port,
    local/tunnel/private-HTTPS access, and the operator-token environment variable.
    The token must be random and at least 32 bytes. It is separate from model keys;
@@ -242,8 +242,16 @@ monitors. Confirm the scope before activation. Existing names, cursors, and paus
 states stay intact. Missing model credentials and example identities block tests
 and activation. The guide supports system units only, not user-unit journals.
 
-Discord uses a named webhook environment variable, normally
-`MRMR_DISCORD_WEBHOOK_URL`. Never paste its URL into the browser or YAML. Shadow
+The visible **Save configuration** control saves a draft; **Review and apply**
+is a separate step. Saving a monitor draft does not start collection or effects.
+
+For Discord, paste the URL only into the guide's **Webhook URL** field, confirm
+the destination change, then use **Save Discord connection**. No SSH or restart is
+needed. The URL is stored privately under the service account's config directory,
+not in YAML, SQLite, or returned browser data. Back up that store privately too.
+A saved connection overrides its matching environment reference, normally
+`MRMR_DISCORD_WEBHOOK_URL`. Existing live users of the connection can send to the
+new destination immediately; saving does not promote shadow rules. Shadow
 setup can retain a missing Discord reference, but it is not ready for delivery.
 The synthetic model test sends no messages. Live promotion and authorized delivery
 tests remain separate work. A configuration containing `monitors` needs the new

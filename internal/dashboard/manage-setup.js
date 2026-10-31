@@ -26,6 +26,7 @@ function resetSetup() {
     "setup-cursor",
     "setup-connection-info",
     "setup-discord-status",
+    "setup-webhook-result",
   ])
     $(id).textContent = "";
   invalidateSetupTest();
@@ -68,16 +69,24 @@ function loadSetup(doc, sourceName = null) {
   const first = prior?.policy?.[0];
   $("setup-notify").value =
     first?.then?.notify?.via === "stdout" ? "stdout" : "discord";
-  const references = new Set(["MRMR_DISCORD_WEBHOOK_URL"]);
+  const references = new Set([
+    "MRMR_DISCORD_WEBHOOK_URL",
+    ...(state.config.connections || [])
+      .filter((c) => c.kind === "Discord")
+      .map((c) => c.name),
+  ]);
   for (const p of [doc, ...Object.values(doc.monitors || {})])
     for (const t of [...(p.policy || []).map((r) => r.then), p.default || {}])
       if (t.notify?.via === "discord") references.add(t.notify.webhook_env);
   for (const ref of references) {
-    const option = el("option", ref);
+    const option = el(
+      "option",
+      ref === "MRMR_DISCORD_WEBHOOK_URL" ? "Default Discord channel" : ref,
+    );
     option.value = ref;
     $("setup-webhook").append(option);
   }
-  const custom = el("option", "Use another environment variable…");
+  const custom = el("option", "Add another Discord connection…");
   custom.value = "";
   $("setup-webhook").append(custom);
   $("setup-webhook").value =
@@ -123,23 +132,114 @@ function selectedProvider() {
     ? setupState.base.models[$("setup-connection").value].provider
     : $("setup-provider").value;
 }
+function discordReference() {
+  return $("setup-webhook").value || $("setup-webhook-env").value.trim();
+}
+function clearDiscordInput() {
+  $("setup-webhook-url").value = "";
+  $("setup-webhook-confirm").checked = false;
+  $("setup-webhook-result").textContent = "";
+}
+async function refreshDiscordConnections() {
+  // Refresh only credential metadata: loading configuration here would discard
+  // the operator's unsaved monitor fields or an unrelated Advanced draft.
+  const data = await api("/manage/api/state");
+  state.config.connections = data.connections;
+  renderConnections();
+  notificationFields();
+  renderMonitors();
+}
+async function saveDiscordConnection() {
+  $("setup-status").textContent = "";
+  const name = discordReference();
+  const url = $("setup-webhook-url").value.trim();
+  if (!url) throw Error("Paste a Discord webhook URL first.");
+  if (!$("setup-webhook-confirm").checked)
+    throw Error(
+      "Confirm the destination change below the webhook URL, then save.",
+    );
+  if (
+    location.protocol !== "https:" &&
+    !["localhost", "127.0.0.1", "[::1]"].includes(location.hostname)
+  )
+    throw Error("Use private HTTPS or localhost to save credentials.");
+  const connection = state.config.connections?.find(
+    (c) => c.kind === "Discord" && c.name === name,
+  );
+  // The password field is write-only. Clear it before awaiting the request,
+  // including failures; no URL is retained in application state or browser storage.
+  clearDiscordInput();
+  $("setup-webhook-result").textContent = "Saving Discord connection…";
+  try {
+    const saved = await api("/manage/api/discord", {
+      name,
+      url,
+      expected: connection?.revision || "",
+      confirm: true,
+    });
+    if (![...$("setup-webhook").options].some((o) => o.value === name)) {
+      const option = el("option", name);
+      option.value = name;
+      $("setup-webhook").insertBefore(
+        option,
+        $("setup-webhook").lastElementChild,
+      );
+    }
+    $("setup-webhook").value = name;
+    // Keep the acknowledged revision, not a later writer's revision fetched in
+    // a second request. A subsequent replacement must detect that conflict.
+    state.config.connections = state.config.connections.filter(
+      (c) => c.kind !== "Discord" || c.name !== name,
+    );
+    state.config.connections.push({
+      name,
+      kind: "Discord",
+      credential: "configured (not tested)",
+      revision: saved.revision,
+    });
+    renderConnections();
+    notificationFields();
+    renderMonitors();
+    $("setup-webhook-result").textContent =
+      "Connection saved. No message sent. Running monitor rules are unchanged.";
+  } catch (error) {
+    if (state.token && state.config) {
+      try {
+        await refreshDiscordConnections();
+      } catch {}
+    }
+    $("setup-webhook-result").textContent =
+      "Save not confirmed. Review connection status, then paste the URL again if needed.";
+    throw error;
+  }
+}
+setupAction("setup-save-discord", () =>
+  configurationTask(saveDiscordConnection),
+);
 function notificationFields() {
   const discord = $("setup-notify").value === "discord";
   const ref = $("setup-webhook").value;
   $("setup-discord").hidden = !discord;
-  $("setup-webhook").disabled = !discord;
+  $("setup-webhook").disabled = !discord || !!state.configBusy;
   $("setup-webhook-new").hidden = !!ref;
-  $("setup-webhook-env").disabled = !discord || !!ref;
+  $("setup-webhook-env").disabled = !discord || !!ref || !!state.configBusy;
+  for (const id of [
+    "setup-webhook-url",
+    "setup-webhook-confirm",
+    "setup-save-discord",
+  ])
+    $(id).disabled = !discord || !!state.configBusy;
+  const name = discordReference();
   const connection = state.config?.connections?.find(
-    (c) => c.kind === "Discord" && c.name === ref,
+    (c) => c.kind === "Discord" && c.name === name,
   );
-  $("setup-discord-status").textContent = ref
-    ? `${ref}: ${connection?.credential || "not checked; provision this reference on the runtime host"}. Shadow mode does not send messages.`
-    : "Enter the variable name only. Provision the webhook in the runtime service environment, then restart mrmr.";
+  $("setup-discord-status").textContent = name
+    ? `${name}: ${connection?.credential || "not saved"}. Delivery has not been tested.`
+    : "Name this connection with letters, numbers, or underscores. Other monitors can reuse it.";
   const generated = selectedProvider() === "openai-compatible";
   $("setup-thresholds").hidden = generated;
   for (const input of $("setup-thresholds").querySelectorAll("input"))
-    input.disabled = generated;
+    input.disabled = generated || !!state.configBusy;
   $("setup-rule-help").textContent = generated
     ? "Notify when category is incident and action is needed. Generated answers do not provide measured probabilities. Otherwise ignore."
     : "Notify when category is incident and both thresholds pass. Otherwise ignore. Thresholds are provisional until reviewed against real Events.";
@@ -164,7 +264,11 @@ function validSetupStep(step) {
   for (const input of document.querySelectorAll(
     `[data-setup-step="${step}"] input,[data-setup-step="${step}"] select`,
   ))
-    if (!input.disabled && !input.reportValidity()) return false;
+    if (!input.disabled && !input.checkValidity()) {
+      setupStep(step);
+      input.reportValidity();
+      return false;
+    }
   return true;
 }
 function invalidateSetupTest() {
@@ -184,7 +288,12 @@ function refreshSetupStart() {
 }
 $("setup-confirm").addEventListener("change", refreshSetupStart);
 $("setup-form").addEventListener("input", (e) => {
-  if (e.target.id === "setup-confirm") return;
+  if (
+    ["setup-confirm", "setup-webhook-url", "setup-webhook-confirm"].includes(
+      e.target.id,
+    )
+  )
+    return;
   setupState.dirty = true;
   changed();
   $("setup-status").textContent =
@@ -192,8 +301,12 @@ $("setup-form").addEventListener("input", (e) => {
 });
 $("setup-connection").addEventListener("change", connectionFields);
 $("setup-provider").addEventListener("change", connectionFields);
-$("setup-notify").addEventListener("change", notificationFields);
-$("setup-webhook").addEventListener("change", notificationFields);
+for (const id of ["setup-notify", "setup-webhook"])
+  $(id).addEventListener("change", () => {
+    clearDiscordInput();
+    notificationFields();
+  });
+$("setup-webhook-env").addEventListener("input", notificationFields);
 $("setup-form").addEventListener("submit", (e) => {
   e.preventDefault();
   if (setupState.step < 3)
@@ -402,15 +515,26 @@ setupAction("setup-next-model", async () => {
 setupAction("setup-back-source", async () => setupStep(0));
 setupAction("setup-back-model", async () => setupStep(1));
 setupAction("setup-back-notify", async () => setupStep(2));
-setupAction("setup-next-notify", async () => {
-  if (!validSetupStep(2)) return;
+async function reviewSetup() {
+  for (let step = 0; step < 3; step++) if (!validSetupStep(step)) return;
+  if ($("setup-webhook-url").value)
+    throw Error(
+      "Save the Discord connection before reviewing, or clear its URL to keep the existing connection.",
+    );
   await configurationTask(async () => {
+    const prior = $("yaml").value,
+      dirty = state.dirty;
     await buildSetup();
+    if (!dirty && $("yaml").value === prior) {
+      state.dirty = false;
+      renderConfigRevision();
+    }
     await validated();
     setupSummary();
     setupStep(3);
   });
-});
+}
+setupAction("setup-next-notify", reviewSetup);
 setupAction("setup-test", async () => {
   if (!setupState.candidate || setupState.candidate !== $("yaml").value)
     throw Error("Draft changed. Go back and review it again.");

@@ -25,6 +25,7 @@ import (
 	"github.com/heath0xff/mrmr/internal/config"
 	"github.com/heath0xff/mrmr/internal/dashboard"
 	"github.com/heath0xff/mrmr/internal/model"
+	"github.com/heath0xff/mrmr/internal/notify"
 	"github.com/heath0xff/mrmr/internal/runtime"
 	"github.com/heath0xff/mrmr/internal/storage"
 )
@@ -46,6 +47,7 @@ type manager struct {
 	db        *storage.DB
 	path      string
 	bootstrap *config.Config
+	discord   *notify.DiscordCredentials
 	current   atomic.Pointer[managedSnapshot]
 	blocked   atomic.Bool
 	// Only one operator mutation or activation may proceed at a time. Reads
@@ -122,7 +124,8 @@ func runManaged(path, addr, host, tokenEnv string, setup bool, setupDB string) e
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	m := &manager{ctx: ctx, db: db, path: path, bootstrap: cfg, host: host, token: sha256.Sum256([]byte(token))}
+	credentials := notify.DefaultDiscordCredentials()
+	m := &manager{ctx: ctx, db: db, path: path, bootstrap: cfg, discord: credentials, host: host, token: sha256.Sum256([]byte(token))}
 	blocked, err := db.EffectsBlocked()
 	if err != nil {
 		return err
@@ -252,7 +255,7 @@ func runManaged(path, addr, host, tokenEnv string, setup bool, setupDB string) e
 }
 
 func (m *manager) snapshot(cfg *config.Config, text string) *managedSnapshot {
-	rt := &runtime.Runtime{DB: m.db, Client: &model.Client{}, ModelCfg: cfg.Models[cfg.Interpret.Model], ModelKey: cfg.Interpret.Model, Prompt: cfg.Interpret.Prompt, Schema: cfg.Interpret.Schema, Questions: cfg.Interpret.Questions, Policy: cfg.Policy, Filters: cfg.Filter, Agents: cfg.Agents, Models: cfg.Models, InterpretByType: cfg.InterpretByType, Monitors: cfg.Monitors, EffectsBlocked: m.blocked.Load, ConfigRevision: revision(text)}
+	rt := &runtime.Runtime{DiscordCredentials: m.discord, DB: m.db, Client: &model.Client{}, ModelCfg: cfg.Models[cfg.Interpret.Model], ModelKey: cfg.Interpret.Model, Prompt: cfg.Interpret.Prompt, Schema: cfg.Interpret.Schema, Questions: cfg.Interpret.Questions, Policy: cfg.Policy, Filters: cfg.Filter, Agents: cfg.Agents, Models: cfg.Models, InterpretByType: cfg.InterpretByType, Monitors: cfg.Monitors, EffectsBlocked: m.blocked.Load, ConfigRevision: revision(text)}
 	return &managedSnapshot{cfg: cfg, rt: rt, view: dashboard.New(rt, cfg), ingress: eventsHandler(rt), yaml: text, revision: revision(text)}
 }
 
@@ -300,6 +303,12 @@ func (m *manager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.Method == "POST" && (r.Header.Get("X-Mrmr-Control") != "1" || !strings.HasPrefix(r.Header.Get("Content-Type"), "application/json")) {
 		http.Error(w, "Explicit JSON control request required.", 403)
+		return
+	}
+	// Remote browser enrollment must use HTTPS at the trusted private proxy.
+	// Loopback HTTP remains available for local use and SSH tunnels.
+	if r.Method == "POST" && r.URL.Path == "/manage/api/discord" && host != "localhost" && host != "127.0.0.1" && host != "::1" && r.Header.Get("Origin") != "https://"+r.Host {
+		http.Error(w, "Use private HTTPS or localhost to save credentials.", 403)
 		return
 	}
 	// The management origin can read existing evidence, but never receives the

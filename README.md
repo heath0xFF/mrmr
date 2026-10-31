@@ -364,7 +364,7 @@ Conditions support literal equality and operator strings: `>`, `>=`, `<`, `<=`, 
 | --- | --- | --- |
 | Ignore | `ignore: true` | Record the outcome; no external effect |
 | Notify | `notify: {via: stdout}` | Print a message; optional Go `message` template |
-| Discord notify | `notify: {via: discord, webhook_env: MRMR_DISCORD_WEBHOOK_URL}` | Send to a fixed webhook from the environment; same message template |
+| Discord notify | `notify: {via: discord, webhook_env: MRMR_DISCORD_WEBHOOK_URL}` | Send to a fixed stored or environment webhook; same message template |
 | Act via HTTP | `action: {type: http, url: "http://127.0.0.1:9000/hook"}` | Send to a configured URL; default method is POST; optional `method` and `body` |
 | Emit event | `action: {type: emit, event_type: incident.escalated}` | Re-enter the same pipeline with the decision result as event data |
 | Delegate | `delegate: {agent: triage, prompt: "Investigate this event."}` | POST to `agents.triage.endpoint`; HTTP 2xx means accepted |
@@ -385,7 +385,10 @@ This records the selected notification without printing it. Shadow does not skip
 
 ### Discord notifications
 
-Keep the webhook URL in an environment variable or a private service environment file, never in YAML or Git:
+In the management guide, choose **Notifications → Discord channel**, paste the
+**Webhook URL**, confirm its scope, and select **Save Discord connection**.
+The field clears after submission. Saving sends no message and changes no policy.
+Existing environment references still work; the YAML contains only the reference:
 
 ```yaml
 then:
@@ -397,6 +400,22 @@ then:
 ```
 
 Only HTTPS webhooks on `discord.com` are accepted. Each send has a 10-second limit, no redirects or application retries, disabled mentions and link previews, and a 2,000-character bound (counted conservatively as UTF-16 units). Discord must confirm message creation (`wait=true`). Errors and traces omit the credential-bearing URL and response body. Missing or invalid secrets produce an execution error; they do not change the destination. Shadow rules do not resolve the secret or send a request.
+
+UI-saved URLs live in `os.UserConfigDir()/mrmr/discord/credentials.json`, outside
+YAML and SQLite. On Linux this is normally `~/.config/mrmr/discord/credentials.json`;
+on macOS it is `~/Library/Application Support/mrmr/discord/credentials.json`.
+The directory is private (0700), files are private (0600), and writes are locked,
+revision-checked, and atomic. This is private plaintext storage, not encryption.
+Use the runtime service account's config directory and keep its backups private.
+The store is shared by mrmr processes using that account and config directory.
+
+A saved connection takes precedence over the environment variable with the same
+name. It is resolved at dispatch, without restart, including for in-flight work.
+Saving or replacing it affects every monitor that uses it; existing live rules can
+use it immediately, while shadow rules remain shadowed. A damaged or unreadable
+store fails closed instead of falling back to an older environment destination.
+The browser can write a URL but cannot read it back. No credential value enters
+management audit records. Model and operator credentials still use the environment.
 
 Discord is an external service. Use a short unit/event reference instead of raw journal text unless you explicitly want to share that text. A timeout can leave delivery uncertain; mrmr does not retry or replay the effect.
 
@@ -604,10 +623,12 @@ runtime. Use evaluation cancellation for a running evaluation.
 - Edit models, sources, and basic ordered policy rules in Advanced, or use the
   complete YAML editor. Forms update the draft only and replace YAML formatting
   and comments. Advanced interpretation, policy, filter, and agent fields remain
-  available in YAML. Common inline credential forms are rejected. Use environment
+  available in YAML. Common inline credential forms are rejected. Use credential
   references; never paste secrets into the editor.
-- Validate, save a draft, inspect its difference from the active configuration,
-  and activate it **in shadow**. Draft and active revisions detect stale edits.
+- Use the visible **Save configuration** toolbar in the guide or Advanced.
+  It saves a draft without applying monitor changes. **Review and apply** leads
+  to the separate confirmation and shadow activation. Status shows **Unsaved
+  changes**, **Saved draft · Not applied**, or **Active**. Draft and active revisions detect stale edits.
   Invalid configuration and failed readiness checks retain the running revision.
 - Pause/resume or remove a source through the draft. Source names retain their
   cursors. A transport or mapping change requires a new source identity; a new
@@ -648,12 +669,16 @@ journals, including user-run Hermes services, are not supported yet.
 Reuse a named model connection without entering its credential reference again,
 or connect another model with a new name. The runtime must reach its API base
 URL; `localhost` means the runtime host. Shared connection edits remain in
-Advanced. Provision credentials outside the browser and restart the service to
-load them. Never paste a key or webhook URL into these fields.
+Advanced. Provision model credentials outside the browser and restart the service
+to load them. Never paste a key or webhook URL into model or YAML fields.
 
-Choose **Discord channel** or **Runtime log (stdout)**. Discord uses a stored
-`webhook_env` reference, normally `MRMR_DISCORD_WEBHOOK_URL`; each reference can
-select a different channel. Missing Discord credentials do not prevent shadow
+Choose **Discord channel** or **Runtime log (stdout)**. Select an existing Discord
+connection or name a new one, then paste its URL in **Webhook URL** and confirm
+**Save Discord connection**. **Save configuration** also saves a pending, confirmed
+webhook before saving the monitor draft. These are separate writes: a connection
+can be saved even if draft saving fails. The connection result reports this.
+The existing `webhook_env` field names the connection; the default is
+`MRMR_DISCORD_WEBHOOK_URL`. Each reference can select a different channel. Missing Discord credentials do not prevent shadow
 setup, but are shown as missing in the active configuration. Presence is not a
 delivery test. Default alert text contains the service, source, and Event ID,
 not raw journal text. Mentions and link previews remain disabled.
@@ -748,8 +773,10 @@ SQLite memory database or URI. Back up SQLite before upgrading; configuration
 rollback does not reverse database migrations. Keep backups private.
 
 Listener and database changes require a process restart. The management UI does
-not run shell commands, restart system services, enroll secrets, or provide an
-OS administration panel. Model/source readiness is not proof of useful decisions
+not run shell commands, restart system services, enroll model/operator keys, or
+provide an OS administration panel. Discord enrollment is the narrow exception:
+it requires management authentication, explicit consent, and private HTTPS or
+local loopback access. Model/source readiness is not proof of useful decisions
 or successful notification delivery. Automatic activation checks validate model
 configuration and credential presence, not endpoint availability. The explicit
 synthetic setup test makes bounded inference calls; ordinary validation does not. Configurations containing inline
@@ -761,7 +788,11 @@ rules. Review them before startup; browser activation accepts only shadow or ign
 
 Before using a new binary against an existing database, stop its runtime and
 other writers and make a consistent private SQLite backup, plus a copy of its
-configuration and binary. Do not copy only the main database file while it is
+configuration, binary, and private Discord credential store. Older binaries do
+not read that store and can fall back to an old environment destination. Before
+binary rollback, block effects or provision the intended destination in the service
+environment. Never restore SQLite merely to undo a credential change.
+Do not copy only the main database file while it is
 running in WAL mode; use a SQLite-aware backup or copy after a clean shutdown.
 
 This update adds **schema migration 9** for drafts/revisions, audit and safety

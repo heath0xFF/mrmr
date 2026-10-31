@@ -16,7 +16,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"os"
 	"strings"
 	"text/template"
 	"time"
@@ -39,15 +38,18 @@ type Runtime struct {
 	// checked after interpretation, immediately before adapter dispatch.
 	EffectsBlocked func() bool
 	ConfigRevision string
-	DB             *storage.DB
-	Client         *model.Client
-	ModelCfg       model.Config
-	ModelKey       string // name in config, recorded on decisions
-	Prompt         string
-	Schema         model.Schema
-	Questions      model.Questions
-	Policy         policy.Policy
-	Filters        filter.List
+	// Credential rotation is separate from immutable policy revisions. Resolve
+	// the current operator-owned destination only when an effect is dispatched.
+	DiscordCredentials *notify.DiscordCredentials
+	DB                 *storage.DB
+	Client             *model.Client
+	ModelCfg           model.Config
+	ModelKey           string // name in config, recorded on decisions
+	Prompt             string
+	Schema             model.Schema
+	Questions          model.Questions
+	Policy             policy.Policy
+	Filters            filter.List
 	// Exact type overrides allow a completion to ask a different bounded
 	// question without introducing independently routed workflows.
 	Monitors        map[string]config.Monitor
@@ -319,7 +321,11 @@ func (r *Runtime) execute(ctx context.Context, t policy.Then, dec *event.Decisio
 			fmt.Println(message)
 		case "discord":
 			// Resolve secrets only after the durable intent and shadow gate.
-			if err := notify.Discord(ctx, r.httpClient(), os.Getenv(t.Notify.WebhookEnv), message); err != nil {
+			webhook, err := r.DiscordCredentials.Resolve(t.Notify.WebhookEnv)
+			if err != nil {
+				return err.Error()
+			}
+			if err := notify.Discord(ctx, r.httpClient(), webhook, message); err != nil {
 				return err.Error()
 			}
 		default:
