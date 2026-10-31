@@ -3,31 +3,24 @@
   "checkpoint_id": "01M6A0EM0T2QE8BAM7ABYV566T",
   "session_id": "01a192f0-0030-7737-8376-ae46067bf9ac",
   "strategy": "manual-commit",
-  "created_at": "2026-10-31T22:14:30.264384Z",
+  "created_at": "2026-10-31T22:15:37.444903Z",
   "branch": "main",
   "checkpoints_count": 4,
   "files_touched": [
-    "cmd/mrmr/control_browser_test.go",
-    "cmd/mrmr/control_config.go",
-    "cmd/mrmr/control_live_test.go",
-    "internal/dashboard/manage-setup.js",
-    "internal/dashboard/manage.browser.cjs",
-    "internal/dashboard/manage.html",
-    "internal/source/journal.go",
-    "internal/source/journal_user_test.go"
+    "cmd/mrmr/control_live_test.go"
   ],
   "agent": "Pi",
   "model": "gpt-6-astra",
   "turn_id": "9bc379236c09",
-  "checkpoint_transcript_start": 584,
-  "transcript_lines_at_start": 584,
-  "compact_transcript_start": 315,
+  "checkpoint_transcript_start": 679,
+  "transcript_lines_at_start": 679,
+  "compact_transcript_start": 366,
   "token_usage": {
-    "input_tokens": 130135,
+    "input_tokens": 814,
     "cache_creation_tokens": 0,
-    "cache_read_tokens": 10893440,
-    "output_tokens": 52040,
-    "api_call_count": 62
+    "cache_read_tokens": 264704,
+    "output_tokens": 1212,
+    "api_call_count": 3
   },
   "redaction": {
     "replacements": 38,
