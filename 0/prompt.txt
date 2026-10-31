@@ -1,0 +1,12 @@
+ok. update the readme please. and then push to main
+
+---
+
+build a roadmap for the dashboard. it's important for a lot of things -- so think thorugh the appropriate flow for the dashboard.
+
+---
+
+1. yes. absolutely. 
+2. improve current then expand
+
+there you go
