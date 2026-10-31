@@ -1,0 +1,54 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M6A3HM2YNACKJKYZBWNK0WEC",
+  "strategy": "manual-commit",
+  "branch": "signal-box-dashboard",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "cmd/mrmr/control_test.go",
+    "cmd/mrmr/managed.go",
+    "internal/dashboard/dashboard.css",
+    "internal/dashboard/dashboard.go",
+    "internal/dashboard/dashboard.js",
+    "internal/dashboard/dashboard_test.go",
+    "internal/dashboard/index.html",
+    "internal/dashboard/manage-monitors.js",
+    "internal/dashboard/manage-setup.js",
+    "internal/dashboard/manage.css",
+    "internal/dashboard/manage.go",
+    "internal/dashboard/manage.html",
+    "internal/dashboard/manage.js",
+    "internal/dashboard/signal.css",
+    "internal/dashboard/signal.js"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 104,
+    "cache_creation_tokens": 463477,
+    "cache_read_tokens": 8228618,
+    "output_tokens": 119259,
+    "api_call_count": 46
+  },
+  "redaction": {
+    "replacements": 20,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 18,
+      "credentialed_uri": 0,
+      "entropy": 2,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
